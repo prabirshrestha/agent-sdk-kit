@@ -62,14 +62,17 @@ jobs:
             -filter-mode=nofilter \
             -reporter=github-pr-review
       - name: oxfmt
+        if: always()
         run: oxfmt .
       - name: oxfmt suggester
+        if: always()
         uses: reviewdog/action-suggester@v1
         with:
           tool_name: oxfmt
           filter_mode: diff_context
           fail_level: any
       - name: tsgo
+        if: always()
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
