@@ -100,9 +100,10 @@ jobs:
           bun-version-file: mise.toml
       - run: bun install --frozen-lockfile
       - run: bun run build
-      - run: bun publish --access public
+      - run: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --access public --ignore-scripts
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         env:
