@@ -3,15 +3,15 @@
   "version": "0.0.1",
   "description": "Agent kit library",
   "keywords": [],
+  "homepage": "https://github.com/prabirshrestha/agent-kit",
+  "bugs": {
+    "url": "https://github.com/prabirshrestha/agent-kit/issues"
+  },
   "license": "MIT",
   "author": "Prabir Shrestha <mail@prabir.me>",
-  "homepage": "https://github.com/prabirshrestha/agent-kit",
   "repository": {
     "type": "git",
     "url": "https://github.com/prabirshrestha/agent-kit.git"
-  },
-  "bugs": {
-    "url": "https://github.com/prabirshrestha/agent-kit/issues"
   },
   "files": [
     "dist"
