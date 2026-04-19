@@ -159,20 +159,20 @@ What each provider + transport supports. Unsupported options throw
 | **Lifecycle**         |              |               |                |          |       |
 | `resume`              |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
 | `resumeSessionAt`     |      ❌      |      ❌       |       ❌       |    ❌    |  ❌   |
-| `forkSession`         |      ✅      |      ❌       |       ✅       |    ✅¹   |  ❌   |
+| `forkSession`         |      ✅      |      ❌       |       ✅       |   ✅¹    |  ❌   |
 | `continue`            |      ✅      |      ❌       |       ❌       |    ❌    |  ❌   |
 | `sessionId` (pin)     |      ✅      |      ❌       |       ❌       |    ❌    |  ❌   |
 | **Per-call options**  |              |               |                |          |       |
-| `systemPrompt`        |      ✅      |      ⚠️²      |       ⚠️²      |    ✅    |  ⚠️²  |
-| `appendSystemPrompt`  |      ✅      |      ⚠️²      |       ⚠️²      |    ✅    |  ⚠️²  |
+| `systemPrompt`        |      ✅      |      ⚠️²      |      ⚠️²       |    ✅    |  ⚠️²  |
+| `appendSystemPrompt`  |      ✅      |      ⚠️²      |      ⚠️²       |    ✅    |  ⚠️²  |
 | `attachments`         |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
-| `tools` (custom)      |      ⚠️²     |      ✅       |       ⚠️²      |    ⚠️²   |  ❌   |
+| `tools` (custom)      |     ⚠️²      |      ✅       |      ⚠️²       |   ⚠️²    |  ❌   |
 | `mcpServers`          |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
 | `abortSignal`         |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
 | `onPermissionRequest` |      ❌      |      ✅       |       ✅       |    ❌    |  ⚠️³  |
 | **Provider features** |              |               |                |          |       |
 | `deleteSession`       |      ✅      |      ✅       |       ✅       |    ❌    |  ❌   |
-| `sandbox` (nono)      |      ✅      |      ❌⁴      |       ❌⁴      |    ✅    |  ❌⁴  |
+| `sandbox` (nono)      |      ✅      |      ❌⁴      |      ❌⁴       |    ✅    |  ❌⁴  |
 
 Legend: ✅ supported · ❌ throws `not_supported` (or no-op for `deleteSession`) · ⚠️ partial — see footnote.
 

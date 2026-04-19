@@ -464,8 +464,7 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
           const err = reason as { code?: number; message?: string } | undefined;
           if (
             err?.code === -32097 ||
-            (typeof err?.message === "string" &&
-              err.message.includes("Pending response rejected"))
+            (typeof err?.message === "string" && err.message.includes("Pending response rejected"))
           ) {
             return;
           }
