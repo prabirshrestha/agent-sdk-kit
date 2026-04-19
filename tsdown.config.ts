@@ -5,4 +5,11 @@ export default defineConfig({
   format: ["esm", "cjs"],
   dts: true,
   clean: true,
+  external: [
+    "@github/copilot-sdk",
+    "@opencode-ai/sdk",
+    "@zed-industries/agent-client-protocol",
+    "zod",
+    "zod-to-json-schema",
+  ],
 });

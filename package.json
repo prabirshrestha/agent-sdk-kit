@@ -1,11 +1,15 @@
 {
   "name": "agent-sdk-kit",
   "version": "0.0.2",
-  "description": "Agent kit library",
+  "description": "Wrap multiple coding-agent CLIs (claude, copilot, opencode, pi) behind a uniform API with native session resume and fork.",
   "keywords": [
+    "acp",
     "agent",
     "ai",
+    "claude",
+    "copilot",
     "llm",
+    "opencode",
     "sdk",
     "toolkit"
   ],
@@ -17,7 +21,7 @@
   "author": "Prabir Shrestha <mail@prabir.me>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/prabirshrestha/agent-sdk-kit.git"
+    "url": "git+https://github.com/prabirshrestha/agent-sdk-kit.git"
   },
   "files": [
     "dist"
@@ -44,20 +48,45 @@
     "check": "bun run --parallel format:check lint typecheck && bun run build && bun run test",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "test": "bun test --shuffle --concurrency",
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:e2e": "bun test tests/e2e",
     "publint": "publint",
     "attw": "attw --pack",
     "prepublishOnly": "bun run build && bun run publint && bun run attw"
   },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
+    "@github/copilot-sdk": "^0.2.2",
+    "@opencode-ai/sdk": "^1.4.12",
     "@types/bun": "^1.3.12",
     "@typescript/native-preview": "^7.0.0-dev.20260419.1",
+    "@zed-industries/agent-client-protocol": "^0.4.5",
     "oxfmt": "^0.45.0",
     "oxlint": "^1.60.0",
     "publint": "^0.3.18",
     "tsdown": "^0.21.9"
+  },
+  "peerDependencies": {
+    "@github/copilot-sdk": "^0.2.2",
+    "@opencode-ai/sdk": "^1.4.12",
+    "@zed-industries/agent-client-protocol": "^0.4.5"
+  },
+  "peerDependenciesMeta": {
+    "@github/copilot-sdk": {
+      "optional": true
+    },
+    "@opencode-ai/sdk": {
+      "optional": true
+    },
+    "@zed-industries/agent-client-protocol": {
+      "optional": true
+    }
   }
 }
