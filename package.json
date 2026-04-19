@@ -3,8 +3,8 @@
   "version": "0.0.1",
   "description": "Agent kit library",
   "keywords": [],
-  "author": "Prabir Shrestha <mail@prabir.me>",
   "license": "MIT",
+  "author": "Prabir Shrestha <mail@prabir.me>",
   "files": [
     "dist"
   ],
