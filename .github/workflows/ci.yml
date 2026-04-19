@@ -99,11 +99,12 @@ jobs:
         with:
           bun-version-file: mise.toml
       - run: bun install --frozen-lockfile
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
       - run: bun run build
-      - run: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: npm publish --access public --ignore-scripts
+      - run: npm publish --provenance --access public --ignore-scripts
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         env:
