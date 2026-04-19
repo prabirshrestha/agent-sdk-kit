@@ -27,11 +27,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run format:check
       - run: bun run lint
-      - run: bun run check
+      - run: bun run typecheck
       - run: bun run build
       - run: bun run test
-      - run: bunx publint
-      - run: bunx attw --pack
+      - run: bun run publint
+      - run: bun run attw --pack
 
   reviewdog:
     if: github.event_name == 'pull_request'
@@ -54,21 +54,19 @@ jobs:
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          bunx oxlint --format=unix 2>&1 | reviewdog -efm="%f:%l:%c: %m" -name="oxlint" -reporter=github-pr-review -filter-mode=nofilter
+          oxlint --format=checkstyle 2>&1 | reviewdog -f=checkstyle -name="oxlint" -reporter=github-pr-review -filter-mode=nofilter
       - name: oxfmt
-        env:
-          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bunx oxfmt .
-          TMPFILE=$(mktemp)
-          git diff >"${TMPFILE}"
-          git stash -u && git stash drop
-          reviewdog -f=diff -f.diff.strip=1 -name="oxfmt" -reporter=github-pr-review -filter-mode=nofilter < "${TMPFILE}"
+        run: oxfmt .
+      - name: oxfmt suggester
+        uses: reviewdog/action-suggester@v1
+        with:
+          tool_name: oxfmt
+          filter_mode: diff_context
       - name: tsgo
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          bunx tsgo --noEmit --pretty false 2>&1 | reviewdog -efm="%f(%l,%c): %m" -name="tsgo" -reporter=github-pr-review -filter-mode=nofilter
+          tsgo --noEmit --pretty false 2>&1 | reviewdog -efm="%f(%l,%c): %m" -name="tsgo" -reporter=github-pr-review -filter-mode=nofilter
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')

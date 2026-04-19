@@ -27,7 +27,8 @@
   },
   "scripts": {
     "build": "tsdown",
-    "check": "tsgo --noEmit",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run build && bun run test",
+    "typecheck": "tsgo --noEmit",
     "lint": "oxlint",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
