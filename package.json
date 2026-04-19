@@ -3,8 +3,8 @@
   "version": "0.0.1",
   "description": "Agent kit library",
   "keywords": [],
-  "author": "Prabir Shrestha <mail@prabir.me>",
   "license": "MIT",
+  "author": "Prabir Shrestha <mail@prabir.me>",
   "files": [
     "dist"
   ],
@@ -27,7 +27,8 @@
   },
   "scripts": {
     "build": "tsdown",
-    "check": "tsgo --noEmit",
+    "check": "bun run --parallel format:check lint typecheck && bun run build && bun run test",
+    "typecheck": "tsgo --noEmit",
     "lint": "oxlint",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

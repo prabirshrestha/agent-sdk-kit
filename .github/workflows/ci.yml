@@ -10,9 +10,9 @@ on:
       - main
       - ci/*
     tags:
-      - 'v0.[0-9]+.[0-9]+'
-      - 'v0.[0-9]+.[0-9]+-beta.[0-9]+'
-      - 'v0.[0-9]+.[0-9]+-alpha.[0-9]+'
+      - "v0.[0-9]+.[0-9]+"
+      - "v0.[0-9]+.[0-9]+-beta.[0-9]+"
+      - "v0.[0-9]+.[0-9]+-alpha.[0-9]+"
 
 jobs:
   ci:
@@ -27,11 +27,61 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run format:check
       - run: bun run lint
-      - run: bun run check
+      - run: bun run typecheck
       - run: bun run build
       - run: bun run test
-      - run: bunx publint
-      - run: bunx attw --pack
+      - run: bun run publint
+      - run: bun run attw --pack
+
+  reviewdog:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: mise.toml
+      - run: bun install --frozen-lockfile
+      - run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+      - uses: reviewdog/action-setup@v1
+        with:
+          reviewdog_version: latest
+      - name: oxlint
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          oxlint --format=checkstyle | reviewdog \
+            -f=checkstyle \
+            -name="oxlint" \
+            -fail-level=any \
+            -filter-mode=nofilter \
+            -reporter=github-pr-review
+      - name: oxfmt
+        if: always()
+        run: oxfmt .
+      - name: oxfmt suggester
+        if: always()
+        uses: reviewdog/action-suggester@v1
+        with:
+          tool_name: oxfmt
+          filter_mode: diff_context
+          fail_level: any
+      - name: tsgo
+        if: always()
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tsgo --noEmit --pretty false | reviewdog \
+            -f=tsc \
+            -name="tsgo" \
+            -fail-level=any \
+            -filter-mode=nofilter \
+            -reporter=github-pr-review
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')
