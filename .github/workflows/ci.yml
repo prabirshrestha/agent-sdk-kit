@@ -54,7 +54,12 @@ jobs:
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          oxlint --format=checkstyle 2>&1 | reviewdog -f=checkstyle -name="oxlint" -reporter=github-pr-review -filter-mode=nofilter
+          oxlint --format=checkstyle | reviewdog \
+            -f=checkstyle \
+            -name="oxlint" \
+            -fail-level=any \
+            -filter-mode=nofilter \
+            -reporter=github-pr-review
       - name: oxfmt
         run: oxfmt .
       - name: oxfmt suggester
@@ -62,11 +67,17 @@ jobs:
         with:
           tool_name: oxfmt
           filter_mode: diff_context
+          fail_level: any
       - name: tsgo
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tsgo --noEmit --pretty false 2>&1 | reviewdog -efm="%f(%l,%c): %m" -name="tsgo" -reporter=github-pr-review -filter-mode=nofilter
+          tsgo --noEmit --pretty false | reviewdog \
+            -f=tsc \
+            -name="tsgo" \
+            -fail-level=any \
+            -filter-mode=nofilter \
+            -reporter=github-pr-review
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')
