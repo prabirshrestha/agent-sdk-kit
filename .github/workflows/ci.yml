@@ -47,6 +47,7 @@ jobs:
         with:
           bun-version-file: mise.toml
       - run: bun install --frozen-lockfile
+      - run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
       - uses: reviewdog/action-setup@v1
         with:
           reviewdog_version: latest
