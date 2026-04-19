@@ -1,4 +1,4 @@
-# agent-kit
+# agent-sdk-kit
 
 Coming soon!
 
