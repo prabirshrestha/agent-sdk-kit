@@ -41,7 +41,9 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "bun test --shuffle --concurrency",
-    "prepublishOnly": "bun run build && publint && attw --pack"
+    "publint": "publint",
+    "attw": "attw --pack",
+    "prepublishOnly": "bun run build && bun run publint && bun run attw"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
