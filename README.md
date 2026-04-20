@@ -24,7 +24,7 @@ Install only what the transports you actually use require. Everything below (exc
 | --------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------- |
 | `@github/copilot-sdk`                   | optional peer dep    | `copilot({ transport: "sdk" })` (copilot default)                                           |
 | `@opencode-ai/sdk`                      | optional peer dep    | `opencode({ transport: "sdk" })` (opencode default)                                         |
-| `@zed-industries/agent-client-protocol` | optional peer dep    | `acp()` (e.g. wrapping `copilot --acp` or `opencode serve --acp`)                           |
+| `@zed-industries/agent-client-protocol` | optional peer dep    | `acp()` (e.g. wrapping `copilot --acp` or `opencode acp`)                                   |
 | `zod`                                   | regular `dependency` | always installed — used by `fromZod()` to convert Zod schemas via Zod v4's `z.toJSONSchema` |
 
 ### CLI requirements
@@ -137,7 +137,7 @@ below. Unsupported combinations throw `AgentError("not_supported", …)`.
 | **pi**       | `cli`, `rpc`         | `cli`   |
 | **acp()**    | `acp`                | `acp`   |
 
-`copilot()` and `opencode()` always speak to their official SDKs in-process.
+`copilot()` and `opencode()` use their official SDKs (which themselves spawn helper subprocesses under the hood — see the Sandbox section).
 If you need to drive either CLI over the **A**gent **C**lient **P**rotocol
 instead, use the generic `acp()` factory:
 
@@ -163,26 +163,38 @@ What each provider + transport supports. Unsupported options throw
 | `continue`            |      ✅      |      ❌       |       ❌       |    ❌    |  ❌   |
 | `sessionId` (pin)     |      ✅      |      ❌       |       ❌       |    ❌    |  ❌   |
 | **Per-call options**  |              |               |                |          |       |
-| `systemPrompt`        |      ✅      |      ⚠️²      |      ⚠️²       |    ✅    |  ⚠️²  |
-| `appendSystemPrompt`  |      ✅      |      ⚠️²      |      ⚠️²       |    ✅    |  ⚠️²  |
+| `systemPrompt`        |     ⚠️¹⁰     |      ✅⁶      |      ✅⁷       |    ✅    |  ⚠️²  |
+| `appendSystemPrompt`  |     ✅¹⁰     |      ❌⁸      |      ⚠️⁷       |    ✅    |  ⚠️²  |
 | `attachments`         |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
-| `tools` (custom)      |     ⚠️²      |      ✅       |      ⚠️²       |   ⚠️²    |  ❌   |
+| `tools` (custom)      |     ⚠️²      |      ✅       |      ⚠️²       |   ⚠️²    |  ⚠️⁹  |
 | `mcpServers`          |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
 | `abortSignal`         |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
 | `onPermissionRequest` |      ❌      |      ✅       |       ✅       |    ❌    |  ⚠️³  |
 | **Provider features** |              |               |                |          |       |
 | `deleteSession`       |      ✅      |      ✅       |       ✅       |    ❌    |  ❌   |
-| `sandbox` (nono)      |      ✅      |      ❌⁴      |      ❌⁴       |    ✅    |  ❌⁴  |
+| `sandbox` (nono)      |      ✅      |      ❌⁴      |       ✅       |    ✅    |  ✅⁵  |
 
 Legend: ✅ supported · ❌ throws `not_supported` (or no-op for `deleteSession`) · ⚠️ partial — see footnote.
 
-¹ pi requires `providerOptions.pi.fork: true` in addition to `forkSession`.
+¹ pi requires opting in via `providerOptions.pi.experimentalFork: true` (legacy alias `providerOptions.pi.fork: true` is also accepted) in addition to `forkSession`.
 
-² Ignored with a one-time `console.warn` (the underlying transport doesn't expose this surface). For custom tools, use `copilot()`.
+² Ignored with a one-time `console.warn` (the underlying transport / protocol doesn't expose this surface). For custom tools on transports that warn, expose them via an MCP server instead — or use `copilot()`, which accepts client-side tool registration directly.
 
 ³ Best-effort: only honored when the underlying ACP server exposes a matching permission hook.
 
-⁴ Sandbox wraps the spawned subprocess; SDK transports run in-process so there is no child to sandbox.
+⁴ Sandbox is not yet wired into the `copilot()` factory. The underlying `@github/copilot-sdk` *does* spawn the Copilot CLI as a subprocess (and exposes `cliPath` / `cliArgs` injection points), so wrapping with `nono run` is feasible — it's just not implemented in the kit today. As a workaround, drive the Copilot CLI over ACP instead: `acp({ spawn: ["copilot", "--acp"], sandbox: { mode: "cwd" } })`.
+
+⁵ Wraps the spawned ACP child with `nono run` per `sandbox` config. See the `Sandbox` section below.
+
+⁶ Copilot SDK applies `systemPrompt` on session **creation** only (mapped to `systemMessage: { mode: "append" }`). Resuming an existing session reuses the prompt baked in at creation; passing a different `systemPrompt` to a resumed session has no effect.
+
+⁷ Opencode's HTTP SDK has a single `body.system` field with no replace-vs-append distinction. The kit collapses `opts.systemPrompt ?? opts.appendSystemPrompt` into that one field, sent on every prompt.
+
+⁸ Copilot SDK exposes only one `systemMessage` slot, which the kit wires to `opts.systemPrompt`. `opts.appendSystemPrompt` is silently dropped — use `opts.systemPrompt` instead.
+
+⁹ Ignored with a one-time `console.warn`. ACP has no client-tool registration in `NewSessionRequest` / `LoadSessionRequest` / `PromptRequest` (verified against the upstream schema). Expose tools via `opts.mcpServers` instead — the kit maps them to ACP's `mcpServers` field.
+
+¹⁰ The Claude Code CLI only exposes `--append-system-prompt` (there is no replace flag). The kit maps **both** `opts.systemPrompt` and `opts.appendSystemPrompt` to that flag, so on claude `systemPrompt` appends to Claude's default rather than replacing it. Both are applied only on `start` / `fork`; resumed sessions reuse the prompt baked in at creation (same as ⁶ for copilot).
 
 ## Detect available agents
 
@@ -308,13 +320,29 @@ const agent = createAgent({
 });
 ```
 
-Sandbox modes:
+Sandbox modes (see https://nono.sh/docs/cli/getting_started/quickstart for the underlying flags):
 
 - `"none"` — No sandboxing (default)
-- `"cwd"` — Restrict to current working directory
-- `"paranoid"` — Full isolation (network deny, minimal filesystem)
-- `{ nonoProfile: "custom" }` — Use a named nono profile
-- `{ nonoProfileFile: "./nono-profile.json" }` — Use a nono config file (any format nono accepts; agent-sdk-kit writes JSON at runtime)
+- `"cwd"` — `nono run --allow <cwd>` — read+write under the working directory, network allowed
+- `"paranoid"` — `nono run --read <cwd> --block-net` — read-only cwd, no network
+- `{ nonoProfile: "claude-code" }` — `nono run --profile <name>` (built-in or `~/.config/nono/profiles/<name>.json`)
+- `{ nonoProfileFile: "./my-profile.json" }` — installs the JSON file into `~/.config/nono/profiles/` under a random name (since `nono --profile` only resolves names) and unlinks it on dispose
+- `SandboxPolicy` object — translated to flag-based invocation (`--allow`, `--read`, `--write`, `--allow-file`, `--read-file`, `--write-file`, `--block-net`, `--allow-domain`). Fields without a CLI equivalent (`filesystem.deny`, `env.strip`, `env.keep`) are ignored with a one-time warning — use a profile file for those.
+
+Sandbox is **not yet wired** into the `copilot()` factory, even though `@github/copilot-sdk` does spawn the Copilot CLI as a subprocess. Until that's plumbed through (it requires overriding `cliPath` / `cliArgs` on the SDK), drive the Copilot CLI over ACP instead:
+
+```ts
+import { createAgent, acp } from "agent-sdk-kit";
+
+const agent = createAgent({
+  provider: acp({
+    spawn: ["copilot", "--acp"],
+    sandbox: { mode: "cwd" },
+  }),
+});
+```
+
+`opencode()` already supports `sandbox` directly: its SDK transport spawns `opencode serve` as a subprocess, which the kit wraps with `nono run` when you pass `sandbox`. So `opencode({ binPath: "/path/to/opencode", sandbox: { mode: "cwd" } })` works without the ACP detour.
 
 ## Cancellation
 

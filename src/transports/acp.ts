@@ -11,6 +11,7 @@ import type {
   AgentEvent,
   Attachment,
   ContentPart,
+  SandboxConfig,
 } from "../types.js";
 import { AgentError, notSupported } from "../errors.js";
 import {
@@ -29,6 +30,7 @@ import {
   type MaterializedAttachment,
 } from "../attachments.js";
 import { spawnProcessWithStdin, type SpawnedProcessWithStdin } from "../runtime.js";
+import { applySandbox } from "../sandbox/index.js";
 import * as acp from "@zed-industries/agent-client-protocol";
 
 // Local alias for the ACP ContentBlock union (exported by the schema).
@@ -188,12 +190,14 @@ export function createAcpTransport(
   spawn: string[],
   cwd?: string,
   env?: Record<string, string>,
+  sandbox?: SandboxConfig,
 ): ProviderImpl {
   let childProcess: SpawnedProcessWithStdin | null = null;
   let agentClient: any = null;
   let acpAutoApproveWarned = false;
   let acpToolsWarned = false;
   let acpSystemPromptWarned = false;
+  let sandboxCleanup: (() => Promise<void>) | undefined;
 
   // Per-session dispatch table. Each stream() registers its handlers keyed by
   // the ACP sessionId so concurrent stream() calls don't cross-contaminate
@@ -224,7 +228,22 @@ export function createAcpTransport(
         for (const [k, v] of Object.entries({ ...process.env, ...env })) {
           if (typeof v === "string") envRecord[k] = v;
         }
-        childProcess = spawnProcessWithStdin([command, ...args], {
+
+        // Wrap with `nono run …` if a sandbox config was provided. SDK
+        // transports (copilot/opencode) cannot use this since they run
+        // in-process; ACP spawns a real child, so the sandbox is enforceable.
+        let cmd = [command, ...args];
+        if (sandbox) {
+          const sandboxResult = await applySandbox(cmd, cwd || process.cwd(), sandbox);
+          cmd = sandboxResult.cmd;
+          sandboxCleanup = sandboxResult.cleanup;
+        }
+        const [exec, ...execArgs] = cmd;
+        if (!exec) {
+          throw new AgentError("invalid_input", "ACP spawn command is empty after sandbox wrap");
+        }
+
+        childProcess = spawnProcessWithStdin([exec, ...execArgs], {
           cwd: cwd || process.cwd(),
           env: envRecord,
           stderr: "inherit",
@@ -815,6 +834,14 @@ export function createAcpTransport(
         childProcess = null;
       }
       agentClient = null;
+      if (sandboxCleanup) {
+        try {
+          await sandboxCleanup();
+        } catch {
+          // ignore cleanup errors
+        }
+        sandboxCleanup = undefined;
+      }
     },
   };
 }

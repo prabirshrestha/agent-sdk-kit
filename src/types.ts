@@ -327,6 +327,7 @@ export interface AcpConfig {
   spawn: string[];
   cwd?: string;
   env?: Record<string, string>;
+  sandbox?: SandboxConfig;
 }
 
 // MCP server config

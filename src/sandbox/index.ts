@@ -1,7 +1,3 @@
-import { promises as fs } from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import * as crypto from "node:crypto";
 import type { SandboxConfig, SandboxPolicy } from "../types.js";
 import { AgentError } from "../errors.js";
 import { spawnProcess } from "../runtime.js";
@@ -14,19 +10,27 @@ export interface SandboxApplyResult {
 }
 
 /**
- * Wraps a child process command with `nono run`
- * - If `config?.mode` is undefined or `"none"` → return `{cmd, applied: false, reason: "mode=none"}`.
+ * Wraps a child process command with `nono run` (see https://nono.sh).
+ *
+ * Behavior:
+ * - If `config?.mode` is undefined or `"none"` → return `{cmd, applied: false}`.
  * - Detect `nono` binary on PATH. If missing:
- *   - If `config.failIfUnavailable` → throw `AgentError("internal", "Sandbox required but nono not installed")`.
- *   - Else log warn and return `{cmd, applied: false, reason: "nono missing"}`.
- * - Detect macOS nesting (`process.env.APP_SANDBOX_CONTAINER_ID` set). If present:
- *   - If `failIfUnavailable` → throw.
- *   - Else warn and return `{cmd, applied: false, reason: "macOS nesting"}`.
- * - For mode === "cwd": write a profile with read=[cwd], write=[cwd], network=allow → temp file → wrap as `["nono","run","--profile",<path>,"--",...cmd]`.
- * - For mode === "paranoid": read=[cwd], write=[cwd], network=deny, env strip "*".
- * - For SandboxPolicy object: serialize fields directly.
- * - For `{nonoProfile}` or `{nonoProfileFile}`: pass to nono accordingly.
- * - Cleanup unlinks temp profile.
+ *   - If `config.failIfUnavailable` → throw `AgentError("internal", …)`.
+ *   - Else warn and return the original cmd unwrapped.
+ * - Detect macOS sandbox nesting (`APP_SANDBOX_CONTAINER_ID`); same fall-back.
+ *
+ * Mode → nono CLI mapping:
+ * - `"cwd"`: `nono run --allow <cwd> -- <cmd>` (read+write under cwd, net allowed).
+ * - `"paranoid"`: `nono run --read <cwd> --block-net -- <cmd>` (read-only cwd, no net).
+ * - `{ nonoProfile: "<name>" }`: `nono run --profile <name> -- <cmd>`. The
+ *   profile must be a built-in or live in `~/.config/nono/profiles/<name>.json`.
+ * - `{ nonoProfileFile: "<path>" }`: same as above but the kit installs the file
+ *   into `~/.config/nono/profiles/` under a random name and unlinks it via
+ *   the returned `cleanup`. (`nono --profile` does not accept arbitrary file
+ *   paths, so this indirection is required.)
+ * - `SandboxPolicy` object: translated to flag form
+ *   (`--read`, `--write`, `--allow`, `--allow-file`, `--read-file`,
+ *    `--write-file`, `--block-net`, `--allow-domain`).
  */
 export async function applySandbox(
   cmd: string[],
@@ -70,45 +74,34 @@ export async function applySandbox(
 
   // Handle different mode types
   if (config.mode === "cwd") {
-    // Built-in preset: read world, write only under cwd, network allow
-    const policy: SandboxPolicy = {
-      filesystem: {
-        read: [effectiveCwd],
-        write: [effectiveCwd],
-      },
-      network: { allow: ["*"] },
-    };
-    return await applyWithPolicy(nonoBinPath, cmd, policy);
+    // Built-in preset: read+write under cwd, network allowed.
+    const wrappedCmd = [nonoBinPath, "run", "--allow", effectiveCwd, "--", ...cmd];
+    return { cmd: wrappedCmd, applied: true };
   } else if (config.mode === "paranoid") {
-    // Built-in preset: read cwd only, no write, no network
-    const policy: SandboxPolicy = {
-      filesystem: {
-        read: [effectiveCwd],
-        write: [],
-      },
-      network: "deny",
-      env: { strip: "*" },
-    };
-    return await applyWithPolicy(nonoBinPath, cmd, policy);
+    // Built-in preset: read-only cwd, no network.
+    const wrappedCmd = [
+      nonoBinPath,
+      "run",
+      "--read",
+      effectiveCwd,
+      "--block-net",
+      "--",
+      ...cmd,
+    ];
+    return { cmd: wrappedCmd, applied: true };
   } else if (typeof config.mode === "object") {
     if ("nonoProfile" in config.mode) {
-      // Named nono profile
+      // Built-in or user-installed profile name.
       const wrappedCmd = [nonoBinPath, "run", "--profile", config.mode.nonoProfile, "--", ...cmd];
       return { cmd: wrappedCmd, applied: true };
     } else if ("nonoProfileFile" in config.mode) {
-      // Inline nono profile file path
-      const wrappedCmd = [
-        nonoBinPath,
-        "run",
-        "--profile",
-        config.mode.nonoProfileFile,
-        "--",
-        ...cmd,
-      ];
-      return { cmd: wrappedCmd, applied: true };
+      // `nono --profile` only accepts a name resolved from
+      // `~/.config/nono/profiles/`, never an arbitrary path. Install the file
+      // there under a unique name, reference it by name, and unlink on cleanup.
+      return await installProfileFile(nonoBinPath, cmd, config.mode.nonoProfileFile);
     } else {
-      // SandboxPolicy object
-      return await applyWithPolicy(nonoBinPath, cmd, config.mode as SandboxPolicy);
+      // SandboxPolicy object → flag-based invocation.
+      return applyWithPolicy(nonoBinPath, cmd, config.mode as SandboxPolicy, effectiveCwd);
     }
   }
 
@@ -146,59 +139,129 @@ async function checkNonoAvailable(nonoBinPath: string): Promise<boolean> {
 }
 
 /**
- * Apply a SandboxPolicy by writing a temp profile file and wrapping the command.
- * Profile format: JSON (best-guess for nono, which may accept KDL or JSON).
+ * Translate a {@link SandboxPolicy} to nono CLI flags.
+ *
+ * Mapping (per https://nono.sh/docs/cli/usage/flags):
+ * - `filesystem.read[]` → repeated `--read <dir>` (or `--read-file <file>` if it
+ *   looks like a single file path with an extension).
+ * - `filesystem.write[]` → repeated `--write <dir>` / `--write-file`.
+ * - `filesystem.allow[]` (read+write) — there is no first-class field today,
+ *   but a path appearing in BOTH `read` and `write` is collapsed to `--allow`.
+ * - `filesystem.deny[]` → currently has no CLI flag (deny is profile-only);
+ *   warn once and ignore. Use `{ nonoProfileFile }` for deny rules.
+ * - `network === "deny"` → `--block-net`.
+ * - `network.allow[]` → repeated `--allow-domain <host>` (with `--block-net`
+ *   implied by the proxy filter; nono treats `--allow-domain` as a host
+ *   allow-list applied through its outbound proxy).
+ * - `env.strip` / `env.keep` → no CLI flag exists; warn once and ignore.
+ *   Use a profile file for env scrubbing.
  */
-async function applyWithPolicy(
+function applyWithPolicy(
   nonoBinPath: string,
   cmd: string[],
   policy: SandboxPolicy,
-): Promise<SandboxApplyResult> {
-  // Write a temp profile file (JSON format, best-guess)
-  // Note: nono's actual profile format might differ; this is a best-effort implementation
-  const profilePath = path.join(
-    os.tmpdir(),
-    `agent-sdk-nono-${crypto.randomBytes(8).toString("hex")}.json`,
-  );
-
-  const profileContent: Record<string, unknown> = {};
+  effectiveCwd: string,
+): SandboxApplyResult {
+  const flags: string[] = [];
 
   if (policy.filesystem) {
-    profileContent.filesystem = {
-      read: policy.filesystem.read || [],
-      write: policy.filesystem.write || [],
-      deny: policy.filesystem.deny || [],
-    };
+    const read = policy.filesystem.read ?? [];
+    const write = policy.filesystem.write ?? [];
+    const both = new Set(read.filter((p) => write.includes(p)));
+
+    for (const p of both) {
+      flags.push(...pickPathFlag("--allow", "--allow-file", p));
+    }
+    for (const p of read) {
+      if (both.has(p)) continue;
+      flags.push(...pickPathFlag("--read", "--read-file", p));
+    }
+    for (const p of write) {
+      if (both.has(p)) continue;
+      flags.push(...pickPathFlag("--write", "--write-file", p));
+    }
+
+    if (policy.filesystem.deny && policy.filesystem.deny.length > 0) {
+      console.warn(
+        "[agent-sdk] sandbox policy.filesystem.deny is not expressible as a nono CLI flag; " +
+          "ignored. Use { nonoProfileFile } with policy.add_deny_access for deny rules.",
+      );
+    }
   }
 
   if (policy.network) {
     if (policy.network === "deny") {
-      profileContent.network = { deny: true };
+      flags.push("--block-net");
     } else {
-      profileContent.network = {
-        allow: policy.network.allow || [],
-        proxy: policy.network.proxy || false,
-      };
+      // Host allow-list: nono routes through its outbound proxy and only
+      // permits listed domains. Wildcards ("*") mean "no restriction"; in that
+      // case we don't emit any --allow-domain flags (network is allowed by
+      // default).
+      const hosts = (policy.network.allow ?? []).filter((h) => h !== "*");
+      for (const h of hosts) {
+        flags.push("--allow-domain", h);
+      }
     }
   }
 
-  if (policy.env) {
-    profileContent.env = {
-      strip: policy.env.strip || [],
-      keep: policy.env.keep || [],
-    };
+  if (policy.env && (policy.env.strip || policy.env.keep)) {
+    console.warn(
+      "[agent-sdk] sandbox policy.env is not expressible as a nono CLI flag; ignored. " +
+        "Use { nonoProfileFile } for environment scrubbing.",
+    );
   }
 
-  await fs.writeFile(profilePath, JSON.stringify(profileContent, null, 2), "utf-8");
+  // If the policy yielded zero flags, fall back to a minimal cwd grant so the
+  // child can at least access its working directory.
+  if (flags.length === 0) {
+    flags.push("--allow", effectiveCwd);
+  }
 
-  const wrappedCmd = [nonoBinPath, "run", "--profile", profilePath, "--", ...cmd];
+  const wrappedCmd = [nonoBinPath, "run", ...flags, "--", ...cmd];
+  return { cmd: wrappedCmd, applied: true };
+}
 
+/** Heuristic: treat as a file (non-recursive flag) if the basename has a dot
+ * AND the path doesn't end with a separator. Otherwise treat as a directory. */
+function pickPathFlag(dirFlag: string, fileFlag: string, p: string): string[] {
+  const trimmed = p.endsWith("/") ? p.slice(0, -1) : p;
+  const base = trimmed.split("/").pop() ?? "";
+  const looksLikeFile = base.includes(".") && !p.endsWith("/");
+  return [looksLikeFile ? fileFlag : dirFlag, p];
+}
+
+/**
+ * Install a user-provided profile JSON into `~/.config/nono/profiles/` under a
+ * unique name and wrap the command with `--profile <name>`. Returns a cleanup
+ * that unlinks the installed file.
+ */
+async function installProfileFile(
+  nonoBinPath: string,
+  cmd: string[],
+  srcPath: string,
+): Promise<SandboxApplyResult> {
+  const fs = await import("node:fs");
+  const fsp = fs.promises;
+  const path = await import("node:path");
+  const os = await import("node:os");
+  const crypto = await import("node:crypto");
+
+  const profilesDir = path.join(os.homedir(), ".config", "nono", "profiles");
+  await fsp.mkdir(profilesDir, { recursive: true });
+
+  const profileName = `agent-sdk-${crypto.randomBytes(8).toString("hex")}`;
+  const installedPath = path.join(profilesDir, `${profileName}.json`);
+
+  const contents = await fsp.readFile(srcPath, "utf-8");
+  await fsp.writeFile(installedPath, contents, "utf-8");
+
+  const wrappedCmd = [nonoBinPath, "run", "--profile", profileName, "--", ...cmd];
   return {
     cmd: wrappedCmd,
     applied: true,
     cleanup: async () => {
       try {
-        await fs.unlink(profilePath);
+        await fsp.unlink(installedPath);
       } catch {
         // ignore cleanup errors
       }

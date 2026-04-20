@@ -16,9 +16,14 @@ import { notSupported } from "../errors.js";
  *   }),
  * });
  * ```
+ *
+ * Pass `sandbox` to wrap the spawned ACP child with `nono run` (see the
+ * `SandboxConfig` docs). This is the supported path for sandboxing copilot /
+ * opencode, since their default in-process SDK transports have no subprocess
+ * to wrap.
  */
 export function acp(config: AcpConfig): ProviderImpl {
-  const transport = createAcpTransport(config.spawn, config.cwd, config.env);
+  const transport = createAcpTransport(config.spawn, config.cwd, config.env, config.sandbox);
 
   return {
     name: "acp",

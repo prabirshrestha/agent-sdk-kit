@@ -22,6 +22,7 @@ import {
 import { AgentError, notSupported } from "../errors.js";
 import { materializeAttachments, cleanupAttachments } from "../attachments.js";
 import { spawnProcess, type SpawnedProcess } from "../runtime.js";
+import { applySandbox } from "../sandbox/index.js";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 
 // Prompt `parts` accepted by SDK's session.promptAsync body.
@@ -79,6 +80,7 @@ export function createOpencodeSdkTransport(config?: OpencodeConfig): ProviderImp
 
   let serverProcess: ServerProcess | undefined;
   let client: OpencodeClient | undefined;
+  let sandboxCleanup: (() => Promise<void>) | undefined;
   // Shared promise used to serialize concurrent ensureServer() callers so
   // multiple stream() invocations don't race to spawn duplicate servers.
   let ensurePromise: Promise<{ client: OpencodeClient; cwd: string }> | null = null;
@@ -111,7 +113,27 @@ export function createOpencodeSdkTransport(config?: OpencodeConfig): ProviderImp
         for (const [k, v] of Object.entries(process.env)) {
           if (typeof v === "string") envRecord[k] = v;
         }
-        const proc = spawnProcess([binPath, ...args], {
+
+        // Wrap the spawn with `nono run …` if a sandbox config was provided.
+        // Caveat: the kit's HTTP control channel goes from the host process to
+        // 127.0.0.1:<port> on the sandboxed server. Modes that block network
+        // (e.g. `paranoid`) will sever that channel unless the user supplies a
+        // profile with `--open-port <port>`. For the common "cwd" mode, network
+        // is allowed, so the loopback HTTP works out of the box.
+        let spawnCmd: string[] = [binPath, ...args];
+        if (config?.sandbox) {
+          const sandboxResult = await applySandbox(spawnCmd, cwd, config.sandbox);
+          spawnCmd = sandboxResult.cmd;
+          sandboxCleanup = sandboxResult.cleanup;
+        }
+        const [exec, ...execArgs] = spawnCmd;
+        if (!exec) {
+          throw new AgentError(
+            "invalid_input",
+            "opencode spawn command is empty after sandbox wrap",
+          );
+        }
+        const proc = spawnProcess([exec, ...execArgs], {
           cwd,
           stdin: "ignore",
           stderr: "pipe",
@@ -205,6 +227,14 @@ export function createOpencodeSdkTransport(config?: OpencodeConfig): ProviderImp
         } catch {
           // already dead
         }
+      }
+      if (sandboxCleanup) {
+        try {
+          await sandboxCleanup();
+        } catch {
+          // ignore cleanup errors (e.g. installed profile file already gone)
+        }
+        sandboxCleanup = undefined;
       }
     },
 
