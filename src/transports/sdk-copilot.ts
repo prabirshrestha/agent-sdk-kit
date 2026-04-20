@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
 import type {
   CopilotConfig,
   ProviderImpl,
@@ -8,6 +9,8 @@ import type {
   AgentTool,
 } from "../types.js";
 import { AgentError, notSupported } from "../errors.js";
+import { which } from "../runtime.js";
+import { applySandbox } from "../sandbox/index.js";
 import {
   isPrivateOrLoopbackHost,
   IMAGE_URL_FETCH_TIMEOUT_MS,
@@ -70,6 +73,72 @@ function buildCopilotSystemMessage(
 
 interface CreateTransportOptions extends CopilotConfig {
   tools?: Record<string, AgentTool>;
+}
+
+interface SandboxedCliOpts {
+  cliPath: string | undefined;
+  cliArgs: string[] | undefined;
+  cleanup?: () => Promise<void>;
+}
+
+// Build the (cliPath, cliArgs) pair to pass to CopilotClient when sandbox is
+// configured. The Copilot SDK spawns its CLI as a subprocess (see
+// github/copilot-sdk nodejs/src/client.ts:1455-1471) and exposes
+// `cliPath` + `cliArgs` (inserted before SDK-managed args). We exploit those
+// hooks to inject `nono run …` as the wrapper:
+//
+//   spawn(<nono-abs>, ["run", ...flags, "--", <copilot-bin>,
+//                       <SDK args: --headless --no-auto-update …>])
+//
+// Caveats / preconditions:
+// - The SDK validates `existsSync(cliPath)` before spawning (client.ts:1444),
+//   so we must resolve `nono` to an absolute path via PATH lookup.
+// - The user MUST pass an explicit `binPath` for the inner CLI when sandbox
+//   is configured — we need a real path on disk to hand to nono.
+// - If the inner `binPath` ends with `.js`, nono won't node-wrap it
+//   (the SDK's auto-node logic only fires when *its* cliPath ends in `.js`),
+//   so we prepend `process.execPath`.
+async function buildSandboxedCopilotCliOpts(
+  binPath: string | undefined,
+  cwd: string,
+  sandbox: CopilotConfig["sandbox"],
+): Promise<SandboxedCliOpts> {
+  if (!sandbox || !sandbox.mode || sandbox.mode === "none") {
+    return { cliPath: binPath, cliArgs: undefined };
+  }
+  if (!binPath) {
+    throw new AgentError(
+      "invalid_input",
+      "copilot({ sandbox }) requires an explicit binPath — the bundled CLI lookup is internal to @github/copilot-sdk and cannot be wrapped with nono without a real path.",
+    );
+  }
+
+  const innerCmd = binPath.endsWith(".js") ? [process.execPath, binPath] : [binPath];
+  const wrapped = await applySandbox(innerCmd, cwd, sandbox);
+  if (!wrapped.applied) {
+    // Sandbox couldn't be applied (e.g. nono missing, macOS nesting) — fall
+    // back to unsandboxed and let the SDK spawn the CLI directly.
+    return { cliPath: binPath, cliArgs: undefined, cleanup: wrapped.cleanup };
+  }
+
+  // wrapped.cmd is [nonoBinPath, "run", ...flags, "--", ...innerCmd]
+  const [nonoBin, ...rest] = wrapped.cmd;
+  if (!nonoBin) {
+    throw new AgentError("internal", "applySandbox returned an empty command");
+  }
+  // The SDK calls existsSync(cliPath) — we need an absolute path.
+  let nonoAbs = nonoBin;
+  if (!isAbsolute(nonoAbs)) {
+    const resolved = await which(nonoAbs);
+    if (!resolved) {
+      throw new AgentError(
+        "internal",
+        `Sandbox enabled but nono binary "${nonoAbs}" could not be resolved on PATH`,
+      );
+    }
+    nonoAbs = resolved;
+  }
+  return { cliPath: nonoAbs, cliArgs: rest, cleanup: wrapped.cleanup };
 }
 
 export function createCopilotSdkTransport(config?: CreateTransportOptions): ProviderImpl {
@@ -144,6 +213,7 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
     let client: CopilotClient | null = null;
     let session: CopilotSession | null = null;
     let abortListener: (() => void) | undefined;
+    let sandboxCleanup: (() => Promise<void>) | undefined;
 
     // Use an async queue to properly stream events from callbacks.
     // Entries are either raw SDK SessionEvents (to be normalized) or
@@ -210,9 +280,13 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
     };
 
     try {
+      const sandboxed = await buildSandboxedCopilotCliOpts(binPath, cwd, config?.sandbox);
+      sandboxCleanup = sandboxed.cleanup;
+
       // Create and start client
       client = new CopilotClient({
-        cliPath: binPath,
+        cliPath: sandboxed.cliPath,
+        ...(sandboxed.cliArgs ? { cliArgs: sandboxed.cliArgs } : {}),
         cwd,
         logLevel: "error",
         // Forward githubToken to the SDK when provided. The SDK accepts it as
@@ -511,6 +585,13 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
           process.off("unhandledRejection", swallow);
         }
       }
+      if (sandboxCleanup) {
+        try {
+          await sandboxCleanup();
+        } catch {
+          // Best-effort: profile-file cleanup is non-critical
+        }
+      }
     }
   }
 
@@ -525,9 +606,13 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
     async deleteSession(sessionId: string): Promise<void> {
       // Delete requires a fresh client instance
       let client: CopilotClient | null = null;
+      let sandboxCleanup: (() => Promise<void>) | undefined;
       try {
+        const sandboxed = await buildSandboxedCopilotCliOpts(binPath, cwd, config?.sandbox);
+        sandboxCleanup = sandboxed.cleanup;
         client = new CopilotClient({
-          cliPath: binPath,
+          cliPath: sandboxed.cliPath,
+          ...(sandboxed.cliArgs ? { cliArgs: sandboxed.cliArgs } : {}),
           cwd,
           logLevel: "error",
         });
@@ -555,6 +640,13 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
           } finally {
             await new Promise((r) => setImmediate(r));
             process.off("unhandledRejection", swallow);
+          }
+        }
+        if (sandboxCleanup) {
+          try {
+            await sandboxCleanup();
+          } catch {
+            // Best-effort
           }
         }
       }

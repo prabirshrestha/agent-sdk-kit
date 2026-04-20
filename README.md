@@ -172,7 +172,7 @@ What each provider + transport supports. Unsupported options throw
 | `onPermissionRequest` |      ❌      |      ✅       |       ✅       |    ❌    |  ⚠️³  |
 | **Provider features** |              |               |                |          |       |
 | `deleteSession`       |      ✅      |      ✅       |       ✅       |    ❌    |  ❌   |
-| `sandbox` (nono)      |      ✅      |      ❌⁴      |       ✅       |    ✅    |  ✅⁵  |
+| `sandbox` (nono)      |      ✅      |      ✅⁴      |       ✅       |    ✅    |  ✅⁵  |
 
 Legend: ✅ supported · ❌ throws `not_supported` (or no-op for `deleteSession`) · ⚠️ partial — see footnote.
 
@@ -182,7 +182,7 @@ Legend: ✅ supported · ❌ throws `not_supported` (or no-op for `deleteSession
 
 ³ Best-effort: only honored when the underlying ACP server exposes a matching permission hook.
 
-⁴ Sandbox is not yet wired into the `copilot()` factory. The underlying `@github/copilot-sdk` *does* spawn the Copilot CLI as a subprocess (and exposes `cliPath` / `cliArgs` injection points), so wrapping with `nono run` is feasible — it's just not implemented in the kit today. As a workaround, drive the Copilot CLI over ACP instead: `acp({ spawn: ["copilot", "--acp"], sandbox: { mode: "cwd" } })`.
+⁴ Sandbox on `copilot()` requires an **explicit `binPath`** for the inner Copilot CLI — the kit overrides `@github/copilot-sdk`'s `cliPath` with `nono` (resolved on PATH) and prepends the wrapper flags via the SDK's `cliArgs` injection point, so the SDK's spawn becomes `nono run …flags -- <binPath> --headless …`. The kit auto-prepends `process.execPath` if `binPath` ends in `.js`. If `nono` isn't installed (and `failIfUnavailable` isn't set), the kit warns and falls back to an unsandboxed spawn.
 
 ⁵ Wraps the spawned ACP child with `nono run` per `sandbox` config. See the `Sandbox` section below.
 
@@ -329,7 +329,20 @@ Sandbox modes (see https://nono.sh/docs/cli/getting_started/quickstart for the u
 - `{ nonoProfileFile: "./my-profile.json" }` — installs the JSON file into `~/.config/nono/profiles/` under a random name (since `nono --profile` only resolves names) and unlinks it on dispose
 - `SandboxPolicy` object — translated to flag-based invocation (`--allow`, `--read`, `--write`, `--allow-file`, `--read-file`, `--write-file`, `--block-net`, `--allow-domain`). Fields without a CLI equivalent (`filesystem.deny`, `env.strip`, `env.keep`) are ignored with a one-time warning — use a profile file for those.
 
-Sandbox is **not yet wired** into the `copilot()` factory, even though `@github/copilot-sdk` does spawn the Copilot CLI as a subprocess. Until that's plumbed through (it requires overriding `cliPath` / `cliArgs` on the SDK), drive the Copilot CLI over ACP instead:
+Sandbox on `copilot()` requires an **explicit `binPath`** for the inner Copilot CLI — the kit needs a real path on disk to hand to nono. The SDK's bundled-CLI lookup is internal and can't be wrapped:
+
+```ts
+import { createAgent, copilot } from "agent-sdk-kit";
+
+const agent = createAgent({
+  provider: copilot({
+    binPath: "/usr/local/bin/copilot", // required when sandbox is set
+    sandbox: { mode: "cwd" },
+  }),
+});
+```
+
+If you'd rather drive the Copilot CLI over ACP instead, that also works:
 
 ```ts
 import { createAgent, acp } from "agent-sdk-kit";
