@@ -326,10 +326,7 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
           model: config?.model,
           reasoningEffort: opts.providerOptions?.copilot?.reasoningEffort,
           tools: convertToolsToSdk(opts.tools ?? tools, opts.abortSignal, emitToolProgress),
-          systemMessage: buildCopilotSystemMessage(
-            opts.systemPrompt,
-            opts.appendSystemPrompt,
-          ),
+          systemMessage: buildCopilotSystemMessage(opts.systemPrompt, opts.appendSystemPrompt),
           workingDirectory: cwd,
         });
 

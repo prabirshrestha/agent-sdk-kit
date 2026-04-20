@@ -79,15 +79,7 @@ export async function applySandbox(
     return { cmd: wrappedCmd, applied: true };
   } else if (config.mode === "paranoid") {
     // Built-in preset: read-only cwd, no network.
-    const wrappedCmd = [
-      nonoBinPath,
-      "run",
-      "--read",
-      effectiveCwd,
-      "--block-net",
-      "--",
-      ...cmd,
-    ];
+    const wrappedCmd = [nonoBinPath, "run", "--read", effectiveCwd, "--block-net", "--", ...cmd];
     return { cmd: wrappedCmd, applied: true };
   } else if (typeof config.mode === "object") {
     if ("nonoProfile" in config.mode) {
