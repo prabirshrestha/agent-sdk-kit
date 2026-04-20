@@ -164,7 +164,7 @@ What each provider + transport supports. Unsupported options throw
 | `sessionId` (pin)     |      ✅      |      ❌       |       ❌       |    ❌    |  ❌   |
 | **Per-call options**  |              |               |                |          |       |
 | `systemPrompt`        |     ⚠️¹⁰     |      ✅⁶      |      ✅⁷       |    ✅    |  ⚠️²  |
-| `appendSystemPrompt`  |     ✅¹⁰     |      ❌⁸      |      ⚠️⁷       |    ✅    |  ⚠️²  |
+| `appendSystemPrompt`  |     ✅¹⁰     |      ✅⁶      |      ⚠️⁷       |    ✅    |  ⚠️²  |
 | `attachments`         |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
 | `tools` (custom)      |     ⚠️²      |      ✅       |      ⚠️²       |   ⚠️²    |  ⚠️⁹  |
 | `mcpServers`          |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
@@ -186,11 +186,11 @@ Legend: ✅ supported · ❌ throws `not_supported` (or no-op for `deleteSession
 
 ⁵ Wraps the spawned ACP child with `nono run` per `sandbox` config. See the `Sandbox` section below.
 
-⁶ Copilot SDK applies `systemPrompt` on session **creation** only (mapped to `systemMessage: { mode: "append" }`). Resuming an existing session reuses the prompt baked in at creation; passing a different `systemPrompt` to a resumed session has no effect.
+⁶ Copilot SDK applies system-prompt config on session **creation** only (resuming reuses the prompt baked in at creation). The kit maps `opts.systemPrompt` to `systemMessage: { mode: "replace" }` (drops SDK guardrails — caller owns the full prompt) and `opts.appendSystemPrompt` to `systemMessage: { mode: "append" }` (keeps the SDK foundation and appends). If both are passed, the kit combines them as `replace` content (`systemPrompt + "\n\n" + appendSystemPrompt`) since the SDK only accepts one `systemMessage` slot per session.
 
 ⁷ Opencode's HTTP SDK has a single `body.system` field with no replace-vs-append distinction. The kit collapses `opts.systemPrompt ?? opts.appendSystemPrompt` into that one field, sent on every prompt.
 
-⁸ Copilot SDK exposes only one `systemMessage` slot, which the kit wires to `opts.systemPrompt`. `opts.appendSystemPrompt` is silently dropped — use `opts.systemPrompt` instead.
+⁸ _(unused — copilot now wires both `systemPrompt` and `appendSystemPrompt` via the SDK's `systemMessage` modes; see ⁶.)_
 
 ⁹ Ignored with a one-time `console.warn`. ACP has no client-tool registration in `NewSessionRequest` / `LoadSessionRequest` / `PromptRequest` (verified against the upstream schema). Expose tools via `opts.mcpServers` instead — the kit maps them to ACP's `mcpServers` field.
 

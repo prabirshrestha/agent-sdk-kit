@@ -35,7 +35,38 @@ import type {
   PermissionHandler,
   PermissionRequest as SdkPermissionRequest,
   PermissionRequestResult,
+  SystemMessageConfig,
 } from "@github/copilot-sdk";
+
+// Map agent-sdk-kit's two prompt slots onto the Copilot SDK's
+// SystemMessageConfig. The SDK supports three modes — append (keep CLI
+// foundation + extra content), replace (caller-provided full prompt, drops
+// SDK guardrails), and customize (section overrides). We use:
+//   - opts.systemPrompt           -> mode: "replace"
+//   - opts.appendSystemPrompt     -> mode: "append"
+//   - both set                    -> "replace" with the appendSystemPrompt
+//                                    concatenated (the SDK only accepts one
+//                                    systemMessage per session, so combining
+//                                    is the only way to honor both inputs).
+// See @github/copilot-sdk/dist/types.d.ts SystemMessageConfig.
+function buildCopilotSystemMessage(
+  systemPrompt: string | undefined,
+  appendSystemPrompt: string | undefined,
+): SystemMessageConfig | undefined {
+  if (systemPrompt && appendSystemPrompt) {
+    return {
+      mode: "replace",
+      content: `${systemPrompt}\n\n${appendSystemPrompt}`,
+    };
+  }
+  if (systemPrompt) {
+    return { mode: "replace", content: systemPrompt };
+  }
+  if (appendSystemPrompt) {
+    return { mode: "append", content: appendSystemPrompt };
+  }
+  return undefined;
+}
 
 interface CreateTransportOptions extends CopilotConfig {
   tools?: Record<string, AgentTool>;
@@ -221,12 +252,10 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
           model: config?.model,
           reasoningEffort: opts.providerOptions?.copilot?.reasoningEffort,
           tools: convertToolsToSdk(opts.tools ?? tools, opts.abortSignal, emitToolProgress),
-          systemMessage: opts.systemPrompt
-            ? {
-                mode: "append" as const,
-                content: opts.systemPrompt,
-              }
-            : undefined,
+          systemMessage: buildCopilotSystemMessage(
+            opts.systemPrompt,
+            opts.appendSystemPrompt,
+          ),
           workingDirectory: cwd,
         });
 
