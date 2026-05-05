@@ -289,7 +289,8 @@ async function* streamOpencodeSdk(
   },
 ): AsyncIterable<AgentEvent> {
   const { client, cwd } = await ctx.ensureServer();
-  const modelStr = ctx.config?.model ?? "github-copilot/gpt-4o";
+  // Per-call `opts.model` wins over construction-time `config.model`.
+  const modelStr = opts.model ?? ctx.config?.model ?? "github-copilot/gpt-4o";
   const agent = ctx.config?.agent;
 
   // Parse model string into {providerID, modelID} format
@@ -343,20 +344,31 @@ async function* streamOpencodeSdk(
         throw new AgentError("invalid_input", "Resume operation requires sessionId");
       }
       sessionId = op.sessionId;
+      // In-place rewind: revert the session to the given message before
+      // sending the new prompt. opencode exposes
+      // `POST /session/{id}/revert` with `body.messageID` (see
+      // @opencode-ai/sdk SessionRevertData) which truncates the session at
+      // that message in place — same session id is preserved.
+      if (op.atMessageId) {
+        await client.session.revert({
+          path: { id: sessionId },
+          body: { messageID: op.atMessageId },
+          query: { directory: cwd },
+          signal: opts.abortSignal,
+        });
+      }
       break;
     }
     case "fork": {
       if (!op.sourceSessionId) {
         throw new AgentError("invalid_input", "Fork operation requires sourceSessionId");
       }
-      if (op.atMessageId) {
-        throw new AgentError(
-          "not_supported",
-          "opencode SDK fork-at-message is wired but not yet plumbed through; pass options.resumeSessionAt only without forkSession to resume at a message, or use forkSession alone to fork from the end.",
-        );
-      }
+      // Fork-at-message: opencode SDK exposes `body.messageID` on
+      // POST /session/{id}/fork (see @opencode-ai/sdk SessionForkData).
+      // When omitted, the fork branches from the end of the source.
       const forkResp = await client.session.fork({
         path: { id: op.sourceSessionId },
+        ...(op.atMessageId ? { body: { messageID: op.atMessageId } } : {}),
         signal: opts.abortSignal,
       });
       sessionId = forkResp.data?.id ?? "";
@@ -365,12 +377,6 @@ async function* streamOpencodeSdk(
       }
       yield sessionForkedEvent(sessionId, op.sourceSessionId);
       break;
-    }
-    case "continue": {
-      throw new AgentError(
-        "not_supported",
-        'opencode SDK does not support options.continue (no notion of "most recent conversation"). Pass options.resume with an explicit session id instead.',
-      );
     }
     default: {
       // Exhaustiveness assertion: if a new StreamOp variant is added, this

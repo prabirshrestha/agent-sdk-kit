@@ -18,6 +18,7 @@ import {
 } from "../attachments.js";
 import {
   sessionEvent,
+  sessionForkedEvent,
   turnStartEvent,
   turnEndEvent,
   textDeltaEvent,
@@ -178,38 +179,6 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
   }
 
   async function* streamImpl(op: StreamOp, opts: CallOptions): AsyncIterable<AgentEvent> {
-    // StreamOp narrowing: handle fork early before allocating any resources.
-    // The high-level @github/copilot-sdk CopilotClient does not expose a fork
-    // method, even though the underlying RPC has `sessions.fork` (see
-    // tmp/copilot-sdk/nodejs/src/generated/rpc.ts:2373). Implementing fork
-    // would require reaching into private connection internals, which is not
-    // a straightforward (<30 lines) integration. Surface NotSupported instead.
-    // TODO: implement via SDK once `client.forkSession()` is exposed publicly.
-    if (op.kind === "fork") {
-      throw notSupported(
-        "Copilot SDK does not support session fork (no client.forkSession exposed yet). Use options.resume to continue an existing session.",
-        "fork_unsupported",
-      );
-    }
-    if (op.kind === "continue") {
-      throw notSupported(
-        "Copilot SDK does not support options.continue (most recent session). Pass options.resume with an explicit session id.",
-        "continue_unsupported",
-      );
-    }
-    if (op.kind === "start" && op.pinnedSessionId) {
-      throw notSupported(
-        "Copilot SDK does not support options.sessionId (pinning a UUID for a new session).",
-        "pinned_session_id_unsupported",
-      );
-    }
-    if (op.kind === "resume" && op.atMessageId) {
-      throw notSupported(
-        "Copilot SDK does not support options.resumeSessionAt (resuming at a specific message UUID).",
-        "resume_at_unsupported",
-      );
-    }
-
     let client: CopilotClient | null = null;
     let session: CopilotSession | null = null;
     let abortListener: (() => void) | undefined;
@@ -297,7 +266,27 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
 
       await client.start();
 
+      // Per-call `opts.model` wins over construction-time `config.model`.
+      // SessionConfig.model is honored on createSession + resumeSession; passing
+      // it on resume effectively switches the model for the upcoming turn.
+      const resolvedModel = opts.model ?? config?.model;
+
       let sessionId: string;
+      let pendingSessionForkedSourceId: string | undefined;
+
+      // Shared SDK event handler — passed via `onEvent` in SessionConfig so it
+      // is registered before the session.create / session.resume RPC fires
+      // (see @github/copilot-sdk/dist/client.js where session.on(config.onEvent)
+      // runs before the connection.sendRequest). This avoids losing any early
+      // lifecycle events that the CLI emits during session creation.
+      const onSdkEvent = (event: SessionEvent): void => {
+        eventQueue.push({ kind: "sdk", event });
+        notifyQueue();
+        if (event.type === "session.idle") {
+          eventQueue.push({ kind: "done" });
+          notifyQueue();
+        }
+      };
 
       if (op.kind === "resume") {
         if (!op.sessionId) {
@@ -308,26 +297,80 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
         // Resume existing session
         session = await client.resumeSession(sessionId, {
           onPermissionRequest: permissionHandler,
-          model: config?.model,
+          model: resolvedModel,
           reasoningEffort: opts.providerOptions?.copilot?.reasoningEffort,
           tools: convertToolsToSdk(opts.tools ?? tools, opts.abortSignal, emitToolProgress),
+          onEvent: onSdkEvent,
         });
+
+        // In-place rewind: truncate the session history to (and including)
+        // op.atMessageId before sending the prompt. Uses the experimental
+        // session-scoped `session.rpc.history.truncate({ eventId })` RPC
+        // (@github/copilot-sdk/dist/generated/rpc.d.ts SessionHistoryTruncateParams):
+        // "this event and all events after it are removed from the session."
+        // Same session id is preserved.
+        if (op.atMessageId) {
+          await session.rpc.history.truncate({ eventId: op.atMessageId });
+        }
+      } else if (op.kind === "fork") {
+        // Fork via the experimental sessions.fork RPC
+        // (`@github/copilot-sdk/dist/generated/rpc.d.ts`: SessionsForkParams).
+        // The high-level CopilotClient does not expose forkSession() yet, but
+        // the public `client.rpc.sessions.fork(...)` getter on
+        // CopilotClient wires the typed call. After the fork RPC returns the
+        // new sessionId, we attach via resumeSession() to register handlers
+        // and stream events.
+        if (!op.sourceSessionId) {
+          throw new AgentError("invalid_input", "Fork operation requires a sourceSessionId");
+        }
+
+        const forkResult = await client.rpc.sessions.fork({
+          sessionId: op.sourceSessionId,
+          ...(op.atMessageId ? { toEventId: op.atMessageId } : {}),
+        });
+        sessionId = forkResult.sessionId;
+        if (!sessionId) {
+          throw new AgentError("provider", "Copilot SDK sessions.fork returned no sessionId");
+        }
+
+        try {
+          session = await client.resumeSession(sessionId, {
+            onPermissionRequest: permissionHandler,
+            model: resolvedModel,
+            reasoningEffort: opts.providerOptions?.copilot?.reasoningEffort,
+            tools: convertToolsToSdk(opts.tools ?? tools, opts.abortSignal, emitToolProgress),
+            onEvent: onSdkEvent,
+          });
+        } catch (err) {
+          // Best-effort: clean up the server-side forked session if we
+          // can't attach to it. Don't mask the original error.
+          await client.deleteSession(sessionId).catch(() => {});
+          throw err;
+        }
+
+        // Defer emission until after we've yielded the standard session event
+        // path (handled below) so consumers see session → session_forked in a
+        // consistent order.
+        pendingSessionForkedSourceId = op.sourceSessionId;
       } else {
         // Pre-generate the sessionId so the wrapper owns the invariant and the
-        // caller can observe it immediately. The SDK's
-        // SessionConfig accepts a caller-supplied `sessionId` (see
-        // tmp/copilot-sdk/nodejs/src/types.ts:1149) and uses it verbatim.
-        sessionId = randomUUID();
+        // caller can observe it immediately. The SDK's SessionConfig accepts
+        // a caller-supplied `sessionId` (see
+        // @github/copilot-sdk/dist/types.d.ts SessionConfig.sessionId) and
+        // uses it verbatim. When the user passes options.sessionId, honor
+        // that value instead of generating a fresh UUID.
+        sessionId = op.pinnedSessionId ?? randomUUID();
 
         // Start new session
         session = await client.createSession({
           sessionId,
           onPermissionRequest: permissionHandler,
-          model: config?.model,
+          model: resolvedModel,
           reasoningEffort: opts.providerOptions?.copilot?.reasoningEffort,
           tools: convertToolsToSdk(opts.tools ?? tools, opts.abortSignal, emitToolProgress),
           systemMessage: buildCopilotSystemMessage(opts.systemPrompt, opts.appendSystemPrompt),
           workingDirectory: cwd,
+          onEvent: onSdkEvent,
         });
 
         if (!session.sessionId || session.sessionId !== sessionId) {
@@ -336,21 +379,27 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
             "Copilot SDK returned a mismatched or missing session ID",
           );
         }
+      }
 
-        // Emit session event immediately so caller knows the ID
+      // Emit lifecycle event so callers can observe the (possibly forked /
+      // pinned) session id. For fork ops, emit `session_forked` instead of
+      // `session` to preserve the source-id linkage; the stream layer
+      // resolves sessionId off either event. We deliberately skip `session`
+      // emission on plain resume (matches opencode/acp conventions — the
+      // caller already knows the id they passed in).
+      if (pendingSessionForkedSourceId) {
+        yield sessionForkedEvent(sessionId, pendingSessionForkedSourceId);
+      } else if (op.kind === "start") {
         yield sessionEvent(sessionId);
       }
 
-      // Register event handler that pushes to queue BEFORE sending
-      const unsubscribe = session.on((event: SessionEvent) => {
-        eventQueue.push({ kind: "sdk", event });
-        notifyQueue();
-
-        if (event.type === "session.idle") {
-          eventQueue.push({ kind: "done" });
-          notifyQueue();
-        }
-      });
+      // SDK event handler is already attached via `onEvent` above (so events
+      // emitted between session.create/resume RPC start and completion are
+      // not lost). No additional `session.on(...)` registration needed.
+      const unsubscribe = (): void => {
+        // No-op: onEvent handlers persist for the session's lifetime and are
+        // cleaned up when the session is disposed.
+      };
 
       // Wire abortSignal: SDK's session.send() does not accept an AbortSignal,
       // so we register a listener that calls session.abort() on cancellation.

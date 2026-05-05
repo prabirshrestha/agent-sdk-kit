@@ -103,13 +103,19 @@ const turn3 = agent.run({
 const forkId = await turn3.sessionId; // Different session ID
 console.log(await turn3.text);
 
-// Resume at a specific message — rewind the session to a prior message
-// UUID and continue from there. Useful for retrying a turn or branching
-// off a known-good point. (Currently surfaced through the API but not yet
-// supported by any transport — see the feature matrix below.)
+// Fork-at-message — branch off a specific prior message UUID. Combine
+// `resume + resumeSessionAt + forkSession` to fork the session at that
+// message into a new session id (supported on copilot and opencode SDKs;
+// see the feature matrix below). Plain `resumeSessionAt` without
+// `forkSession` is not supported by any transport — neither SDK exposes
+// in-place history truncation.
 const turn4 = agent.run({
   prompt: "Try that again, but shorter",
-  options: { resume: sessionId, resumeSessionAt: "<message-uuid>" },
+  options: {
+    resume: sessionId,
+    resumeSessionAt: "<message-uuid>",
+    forkSession: true,
+  },
 });
 console.log(await turn4.text);
 ```
@@ -121,8 +127,8 @@ Other lifecycle options on `RunOptions`:
 | `resume`          | Continue the session with this id                                            |
 | `resumeSessionAt` | Resume at a specific message UUID within the session (requires `resume`)     |
 | `forkSession`     | Branch the resumed session into a new session id (requires `resume`)         |
-| `continue`        | Continue the most recent conversation                                        |
 | `sessionId`       | Pin a UUID for the new session instead of letting the provider auto-generate |
+| `model`           | Per-call model override; takes precedence over the provider's `config.model` |
 
 Not every option is supported by every transport — see the **Feature matrix**
 below. Unsupported combinations throw `AgentError("not_supported", …)`.
@@ -157,44 +163,95 @@ What each provider + transport supports. Unsupported options throw
 |                       | claude (CLI) | copilot (SDK) | opencode (SDK) | pi (CLI) | acp() |
 | --------------------- | :----------: | :-----------: | :------------: | :------: | :---: |
 | **Lifecycle**         |              |               |                |          |       |
-| `resume`              |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
-| `resumeSessionAt`     |      ❌      |      ❌       |       ❌       |    ❌    |  ❌   |
-| `forkSession`         |      ✅      |      ❌       |       ✅       |   ✅¹    |  ❌   |
-| `continue`            |      ✅      |      ❌       |       ❌       |    ❌    |  ❌   |
-| `sessionId` (pin)     |      ✅      |      ❌       |       ❌       |    ❌    |  ❌   |
+| `resume`              |      ✓       |       ✓       |       ✓        |    ✓     |   ✓   |
+| `resumeSessionAt`     |      ✗       |       ✓       |       ✓        |    ✗     |   ✗   |
+| `forkSession`         |      ✓       |       ✓       |       ✓        |    ✓     |   ✗   |
+| `sessionId` (pin)     |      ✓       |       ✓       |       ✗        |    ✗     |   ✗   |
 | **Per-call options**  |              |               |                |          |       |
-| `systemPrompt`        |     ⚠️¹⁰     |      ✅⁶      |      ✅⁷       |    ✅    |  ⚠️²  |
-| `appendSystemPrompt`  |     ✅¹⁰     |      ✅⁶      |      ⚠️⁷       |    ✅    |  ⚠️²  |
-| `attachments`         |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
-| `tools` (custom)      |     ⚠️²      |      ✅       |      ⚠️²       |   ⚠️²    |  ⚠️⁹  |
-| `mcpServers`          |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
-| `abortSignal`         |      ✅      |      ✅       |       ✅       |    ✅    |  ✅   |
-| `onPermissionRequest` |      ❌      |      ✅       |       ✅       |    ❌    |  ⚠️³  |
+| `systemPrompt`        |      ~       |       ✓       |       ✓        |    ✓     |   ~   |
+| `appendSystemPrompt`  |      ✓       |       ✓       |       ~        |    ✓     |   ~   |
+| `model` (override)    |      ✓       |       ✓       |       ✓        |    ✓     |   ~   |
+| `attachments`         |      ✓       |       ✓       |       ✓        |    ✓     |   ✓   |
+| `tools` (custom)      |      ~       |       ✓       |       ~        |    ~     |   ~   |
+| `mcpServers`          |      ✓       |       ✓       |       ✓        |    ~     |   ✓   |
+| `abortSignal`         |      ✓       |       ✓       |       ✓        |    ✓     |   ✓   |
+| `onPermissionRequest` |      ✗       |       ✓       |       ✓        |    ✗     |   ~   |
 | **Provider features** |              |               |                |          |       |
-| `deleteSession`       |      ✅      |      ✅       |       ✅       |    ❌    |  ❌   |
-| `sandbox` (nono)      |      ✅      |      ✅⁴      |       ✅       |    ✅    |  ✅⁵  |
+| `deleteSession`       |      ✓       |       ✓       |       ✓        |    ✗     |   ✗   |
+| `sandbox` (nono)      |      ✓       |       ✓       |       ✓        |    ✓     |   ✓   |
 
-Legend: ✅ supported · ❌ throws `not_supported` (or no-op for `deleteSession`) · ⚠️ partial — see footnote.
+Legend: **✓** supported · **✗** throws `not_supported` (or no-op for `deleteSession`) · **~** partial — see Notes below.
 
-¹ pi requires opting in via `providerOptions.pi.experimentalFork: true` (legacy alias `providerOptions.pi.fork: true` is also accepted) in addition to `forkSession`.
+### Notes
 
-² Ignored with a one-time `console.warn` (the underlying transport / protocol doesn't expose this surface). For custom tools on transports that warn, expose them via an MCP server instead — or use `copilot()`, which accepts client-side tool registration directly.
+| Cell                             | Note |
+| -------------------------------- | ---- |
+| pi × `forkSession`               | [1]  |
+| copilot × `resumeSessionAt`      | [11] |
+| opencode × `resumeSessionAt`     | [11] |
+| acp × `model`                    | [12] |
+| claude × `systemPrompt`          | [10] |
+| claude × `appendSystemPrompt`    | [10] |
+| copilot × `systemPrompt`         | [6]  |
+| copilot × `appendSystemPrompt`   | [6]  |
+| opencode × `systemPrompt`        | [7]  |
+| opencode × `appendSystemPrompt`  | [7]  |
+| acp × `systemPrompt`             | [2]  |
+| acp × `appendSystemPrompt`       | [2]  |
+| claude / opencode / pi × `tools` | [2]  |
+| acp × `tools`                    | [9]  |
+| pi × `mcpServers`                | [8]  |
+| acp × `onPermissionRequest`      | [3]  |
+| copilot × `sandbox`              | [4]  |
+| acp × `sandbox`                  | [5]  |
 
-³ Best-effort: only honored when the underlying ACP server exposes a matching permission hook.
+[1] pi requires opting in via `providerOptions.pi.experimentalFork: true` (legacy alias `providerOptions.pi.fork: true` is also accepted) in addition to `forkSession`.
 
-⁴ Sandbox on `copilot()` requires an **explicit `binPath`** for the inner Copilot CLI — the kit overrides `@github/copilot-sdk`'s `cliPath` with `nono` (resolved on PATH) and prepends the wrapper flags via the SDK's `cliArgs` injection point, so the SDK's spawn becomes `nono run …flags -- <binPath> --headless …`. The kit auto-prepends `process.execPath` if `binPath` ends in `.js`. If `nono` isn't installed (and `failIfUnavailable` isn't set), the kit warns and falls back to an unsandboxed spawn.
+[2] Ignored with a one-time `console.warn` (the underlying transport / protocol doesn't expose this surface). For custom tools on transports that warn, expose them via an MCP server instead — or use `copilot()`, which accepts client-side tool registration directly.
 
-⁵ Wraps the spawned ACP child with `nono run` per `sandbox` config. See the `Sandbox` section below.
+[3] Best-effort: only honored when the underlying ACP server exposes a matching permission hook.
 
-⁶ Copilot SDK applies system-prompt config on session **creation** only (resuming reuses the prompt baked in at creation). The kit maps `opts.systemPrompt` to `systemMessage: { mode: "replace" }` (drops SDK guardrails — caller owns the full prompt) and `opts.appendSystemPrompt` to `systemMessage: { mode: "append" }` (keeps the SDK foundation and appends). If both are passed, the kit combines them as `replace` content (`systemPrompt + "\n\n" + appendSystemPrompt`) since the SDK only accepts one `systemMessage` slot per session.
+[4] Sandbox on `copilot()` requires an **explicit `binPath`** for the inner Copilot CLI — the kit overrides `@github/copilot-sdk`'s `cliPath` with `nono` (resolved on PATH) and prepends the wrapper flags via the SDK's `cliArgs` injection point, so the SDK's spawn becomes `nono run …flags -- <binPath> --headless …`. The kit auto-prepends `process.execPath` if `binPath` ends in `.js`. If `nono` isn't installed (and `failIfUnavailable` isn't set), the kit warns and falls back to an unsandboxed spawn.
 
-⁷ Opencode's HTTP SDK has a single `body.system` field with no replace-vs-append distinction. The kit collapses `opts.systemPrompt ?? opts.appendSystemPrompt` into that one field, sent on every prompt.
+[5] Wraps the spawned ACP child with `nono run` per `sandbox` config. See the `Sandbox` section below.
 
-⁸ _(unused — copilot now wires both `systemPrompt` and `appendSystemPrompt` via the SDK's `systemMessage` modes; see ⁶.)_
+[6] Copilot SDK applies system-prompt config on session **creation** only (resuming reuses the prompt baked in at creation). The kit maps `opts.systemPrompt` to `systemMessage: { mode: "replace" }` (drops SDK guardrails — caller owns the full prompt) and `opts.appendSystemPrompt` to `systemMessage: { mode: "append" }` (keeps the SDK foundation and appends). If both are passed, the kit combines them as `replace` content (`systemPrompt + "\n\n" + appendSystemPrompt`) since the SDK only accepts one `systemMessage` slot per session.
 
-⁹ Ignored with a one-time `console.warn`. ACP has no client-tool registration in `NewSessionRequest` / `LoadSessionRequest` / `PromptRequest` (verified against the upstream schema). Expose tools via `opts.mcpServers` instead — the kit maps them to ACP's `mcpServers` field.
+[7] Opencode's HTTP SDK has a single `body.system` field with no replace-vs-append distinction. The kit collapses `opts.systemPrompt ?? opts.appendSystemPrompt` into that one field, sent on every prompt.
 
-¹⁰ The Claude Code CLI only exposes `--append-system-prompt` (there is no replace flag). The kit maps **both** `opts.systemPrompt` and `opts.appendSystemPrompt` to that flag, so on claude `systemPrompt` appends to Claude's default rather than replacing it. Both are applied only on `start` / `fork`; resumed sessions reuse the prompt baked in at creation (same as ⁶ for copilot).
+[8] pi has no MCP configuration surface (`PiConfig` omits `mcpServers` and the pi CLI exposes no flag for MCP server config). `opts.mcpServers` is ignored with a one-time `console.warn`.
+
+[9] Ignored with a one-time `console.warn`. ACP has no client-tool registration in `NewSessionRequest` / `LoadSessionRequest` / `PromptRequest` (verified against the upstream schema). Expose tools via `opts.mcpServers` instead — the kit maps them to ACP's `mcpServers` field.
+
+[10] The Claude Code CLI only exposes `--append-system-prompt` (there is no replace flag). The kit maps **both** `opts.systemPrompt` and `opts.appendSystemPrompt` to that flag, so on claude `systemPrompt` appends to Claude's default rather than replacing it. Both are applied only on `start` / `fork`; resumed sessions reuse the prompt baked in at creation (same as [6] for copilot).
+
+[11] In-place rewind (same session id preserved): copilot calls the experimental session-scoped `session.rpc.history.truncate({ eventId })` RPC after `resumeSession`; opencode calls `POST /session/{id}/revert` with `body.messageID` before the prompt. Combine with `forkSession: true` for fork-at-message instead: copilot routes to `sessions.fork({ toEventId })` and opencode to `POST /session/{id}/fork` with `body.messageID`. The new session id is surfaced as a `session_forked` event with the source id.
+
+[12] ACP's `session/set_model` RPC is marked **UNSTABLE** in the schema ("not part of the spec yet, and may be removed or changed at any point") and is only honored when the agent advertises support via `NewSessionResponse.models`. The kit calls it before the prompt when `opts.model` (or `AcpConfig.model`) is set; if the agent doesn't advertise model selection, the call throws `not_supported`. Format is whatever model id the agent advertises in its `availableModels`.
+
+## Per-call model override
+
+Every transport accepts a per-call `model` on `RunOptions`/`CallOptions` that wins over the provider's construction-time `config.model`:
+
+```ts
+const agent = new Agent({ provider: copilot({ model: "claude-sonnet-4" }) });
+
+// Use the configured default
+await agent.send("hello").text;
+
+// Override for this turn only
+await agent.send("write a haiku", { model: "claude-haiku-4-5" }).text;
+```
+
+Format per provider:
+
+| Provider     | `model` value                                                                |
+| ------------ | ---------------------------------------------------------------------------- |
+| **claude**   | model id (e.g. `"claude-sonnet-4-5"`) — passed as `--model`                  |
+| **copilot**  | model id passed to the SDK's `createSession` / `resumeSession` config        |
+| **opencode** | `"providerID/modelID"` (e.g. `"github-copilot/gpt-4o"`) or just `modelID`    |
+| **pi**       | model id — passed as `--model`                                               |
+| **acp()**    | whatever model id the agent advertises (only if it supports `set_model`) — see [12] |
 
 ## Detect available agents
 

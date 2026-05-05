@@ -23,7 +23,13 @@ import { notSupported } from "../errors.js";
  * to wrap.
  */
 export function acp(config: AcpConfig): ProviderImpl {
-  const transport = createAcpTransport(config.spawn, config.cwd, config.env, config.sandbox);
+  const transport = createAcpTransport(
+    config.spawn,
+    config.cwd,
+    config.env,
+    config.sandbox,
+    config.model,
+  );
 
   return {
     name: "acp",

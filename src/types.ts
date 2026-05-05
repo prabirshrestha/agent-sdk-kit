@@ -25,6 +25,19 @@ export interface CallOptions {
   parts?: ContentPart[];
   systemPrompt?: string;
   appendSystemPrompt?: string;
+  /**
+   * Per-call model override. When set, takes precedence over the provider's
+   * construction-time `config.model`. Format is provider-specific:
+   *   - claude: model id (e.g. `"claude-sonnet-4-5"`) — passed as `--model`.
+   *   - copilot SDK: model id passed to the SDK's `createSession` /
+   *     `resumeSession` config; on resume the override applies to the next
+   *     turn (no in-place model swap).
+   *   - opencode SDK: `"providerID/modelID"` (e.g. `"github-copilot/gpt-4o"`)
+   *     or just `modelID` (defaults provider to `github-copilot`).
+   *   - pi: model id — passed as `--model`.
+   *   - acp: ignored (no model concept in the protocol).
+   */
+  model?: string;
   tools?: Record<string, AgentTool>;
   mcpServers?: McpServerConfig[];
   onPermissionRequest?: (
@@ -327,6 +340,14 @@ export interface AcpConfig {
   spawn: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /**
+   * Default model id to select via the ACP `session/set_model` RPC. Only
+   * honored when the agent advertises model selection support
+   * (`NewSessionResponse.models` is non-null). Per the ACP schema this
+   * capability is **UNSTABLE** ("not part of the spec yet, and may be removed
+   * or changed at any point"). Per-call `opts.model` overrides this.
+   */
+  model?: string;
   sandbox?: SandboxConfig;
 }
 
@@ -418,11 +439,6 @@ export type StreamOp =
       prompt: string;
       attachments?: Attachment[];
       atMessageId?: string;
-    }
-  | {
-      kind: "continue";
-      prompt: string;
-      attachments?: Attachment[];
     };
 
 // AgentStream is the async iterable of events from a provider
@@ -440,7 +456,6 @@ export type Provider = ProviderImpl;
  * - `agent.run({ prompt: "more", options: { resume } })` — continue a session
  * - `agent.run({ prompt: "more", options: { resume, forkSession: true } })` — branch
  * - `agent.run({ prompt: "more", options: { resume, resumeSessionAt } })` — resume at a message
- * - `agent.run({ prompt: "more", options: { continue: true } })` — continue most recent
  * - `agent.run({ prompt: "hi", options: { sessionId } })` — pin a UUID for the new session
  *
  * AbortSignal contract: AbortSignal cancellation is best-effort. The wrapper
@@ -499,8 +514,6 @@ export interface RunOptions extends CallOptions {
    * id is independent of the source.
    */
   forkSession?: boolean;
-  /** Continue the most recent conversation. */
-  continue?: boolean;
   /** Pin a specific UUID for the new session instead of letting the provider auto-generate. */
   sessionId?: string;
 }

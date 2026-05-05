@@ -191,6 +191,7 @@ export function createAcpTransport(
   cwd?: string,
   env?: Record<string, string>,
   sandbox?: SandboxConfig,
+  defaultModel?: string,
 ): ProviderImpl {
   let childProcess: SpawnedProcessWithStdin | null = null;
   let agentClient: any = null;
@@ -207,6 +208,11 @@ export function createAcpTransport(
     requestPermission: (params: any) => Promise<any>;
   };
   const sessionHandlers = new Map<string, SessionHandlers>();
+
+  // Per-session "does the agent advertise model selection?" — populated from
+  // NewSessionResponse.models. Used to decide whether to attempt the
+  // experimental session/set_model RPC (schema marks it UNSTABLE).
+  const sessionSupportsModelSelection = new Map<string, boolean>();
 
   // Serialize concurrent initialization. Without this, two concurrent stream()
   // calls both observe `!agentClient`, both spawn a child process, and both
@@ -716,6 +722,11 @@ export function createAcpTransport(
             throw new AgentError("provider", "ACP server did not return a session ID");
           }
 
+          // Track whether the agent advertised model selection on this
+          // session. ACP's session/set_model RPC is UNSTABLE per the schema
+          // and only meaningful when NewSessionResponse.models is non-null.
+          sessionSupportsModelSelection.set(sessionId, !!newSessionResult.models);
+
           // Register per-session handlers now that we know the sessionId.
           sessionHandlers.set(sessionId, {
             sessionUpdate: handleSessionUpdate,
@@ -771,11 +782,37 @@ export function createAcpTransport(
             "ACP transport does not support fork; each call spawns a fresh ACP process and sessions are tied to that connection. Use options.resume within the same process lifecycle.",
             "fork_unsupported",
           );
-        } else if (op.kind === "continue") {
-          throw notSupported(
-            "ACP transport does not support options.continue (most recent session). Pass options.resume with an explicit session id.",
-            "continue_unsupported",
-          );
+        }
+
+        // Per-call `opts.model` wins over construction-time `config.model`.
+        // ACP's session/set_model RPC is UNSTABLE per the schema; only
+        // attempt it when the agent advertised support via the session's
+        // `models` capability. For resumed sessions whose support flag we
+        // didn't capture (loadSession doesn't return `models`), best-effort:
+        // try the call and surface a clear error if the agent rejects it.
+        const modelOverride = opts.model ?? defaultModel;
+        if (modelOverride && sessionId) {
+          if (sessionSupportsModelSelection.get(sessionId) === false) {
+            throw notSupported(
+              `ACP agent did not advertise model selection on this session (NewSessionResponse.models was null), so model override "${modelOverride}" cannot be applied. The session/set_model capability is marked UNSTABLE in the ACP schema.`,
+              "model_override_unsupported",
+            );
+          }
+          if (!agentClient.setSessionModel) {
+            throw notSupported(
+              `ACP client does not implement setSessionModel; cannot apply model override "${modelOverride}".`,
+              "model_override_unsupported",
+            );
+          }
+          try {
+            await agentClient.setSessionModel({ sessionId, modelId: modelOverride });
+          } catch (err) {
+            throw new AgentError(
+              "provider",
+              `ACP setSessionModel failed for "${modelOverride}": ${err instanceof Error ? err.message : String(err)}`,
+              err,
+            );
+          }
         }
 
         // Send prompt (text + attachments + pass-through parts).

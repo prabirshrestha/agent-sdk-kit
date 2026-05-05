@@ -129,18 +129,6 @@ export function createAgent(opts: CreateAgentOptions): Agent {
       if (callOpts?.resumeSessionAt && !callOpts.resume?.trim()) {
         throw new AgentError("invalid_input", "options.resumeSessionAt requires options.resume");
       }
-      if (callOpts?.continue && callOpts?.resume?.trim()) {
-        throw new AgentError(
-          "invalid_input",
-          "options.continue and options.resume are mutually exclusive",
-        );
-      }
-      if (callOpts?.continue && callOpts?.sessionId?.trim()) {
-        throw new AgentError(
-          "invalid_input",
-          "options.continue and options.sessionId are mutually exclusive",
-        );
-      }
       if (callOpts?.sessionId?.trim() && callOpts?.resume?.trim()) {
         throw new AgentError(
           "invalid_input",
@@ -155,7 +143,6 @@ export function createAgent(opts: CreateAgentOptions): Agent {
         resume,
         resumeSessionAt,
         forkSession,
-        continue: continueRecent,
         sessionId: pinnedSessionId,
         ...providerOpts
       } = merged;
@@ -175,8 +162,6 @@ export function createAgent(opts: CreateAgentOptions): Agent {
           prompt: promptText,
           ...(resumeSessionAt ? { atMessageId: resumeSessionAt } : {}),
         };
-      } else if (continueRecent) {
-        op = { kind: "continue", prompt: promptText };
       } else {
         op = {
           kind: "start",

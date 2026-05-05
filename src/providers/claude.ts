@@ -181,19 +181,15 @@ export function buildCommand(
       cmd.push("--resume", sessionId);
       break;
     }
-    case "continue": {
-      // Claude CLI continues most recent via `-c`; session id is unknown until the run starts.
-      sessionId = "";
-      cmd.push("-c");
-      break;
-    }
     default:
       throw new AgentError("internal", `Unknown op kind: ${(op as StreamOp).kind}`);
   }
 
-  // Model override
-  if (ctx.config?.model) {
-    cmd.push("--model", ctx.config.model);
+  // Model override — per-call `opts.model` wins over construction-time
+  // `config.model` so callers can switch models per turn.
+  const modelOverride = opts.model ?? ctx.config?.model;
+  if (modelOverride) {
+    cmd.push("--model", modelOverride);
   }
 
   // System prompt — only applies to NEW sessions (start / fork).

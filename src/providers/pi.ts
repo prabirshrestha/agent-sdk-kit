@@ -138,12 +138,6 @@ export function buildCommand(
       cmd.push("--fork", op.sourceSessionId);
       break;
     }
-    case "continue": {
-      throw new AgentError(
-        "not_supported",
-        "pi CLI does not support options.continue (most recent session). Pass options.resume with an explicit session id.",
-      );
-    }
     default:
       throw new AgentError("invalid_input", `Unknown op kind: ${(op as StreamOp).kind}`);
   }
@@ -160,10 +154,12 @@ export function buildCommand(
     }
   }
 
-  // Model override — pi supports "provider/id" embedded in --model, so prefer
-  // a combined string if config.provider + config.model both set.
-  if (ctx.config?.model) {
-    cmd.push("--model", ctx.config.model);
+  // Model override — per-call `opts.model` wins over construction-time
+  // `config.model`. pi supports "provider/id" embedded in --model, so prefer
+  // a combined string if config.provider + model both set.
+  const modelOverride = opts.model ?? ctx.config?.model;
+  if (modelOverride) {
+    cmd.push("--model", modelOverride);
   }
   if (ctx.config?.provider) {
     cmd.push("--provider", ctx.config.provider);
