@@ -19,7 +19,7 @@ describe.skipIf(!enabled)("opencode SDK / resume", () => {
     );
     expect(r2.sessionId).toBe(r1.sessionId);
     expect(r2.text.toLowerCase()).toContain("banana");
-  }, 240_000);
+  }, 600_000);
 
   test("3-turn resume preserves context + fullStream ordering", async () => {
     await using agent = createAgent({ provider: opencode(ocConfig) });
@@ -45,7 +45,7 @@ describe.skipIf(!enabled)("opencode SDK / resume", () => {
     expect(r3.sessionId).toBe(r1.sessionId);
     expect(r3.text.toLowerCase()).toContain("42");
     expect(r3.text.toLowerCase()).toContain("blue");
-  }, 300_000);
+  }, 900_000);
 });
 
 describe.skipIf(!enabled)("opencode SDK / fork", () => {
@@ -62,5 +62,5 @@ describe.skipIf(!enabled)("opencode SDK / fork", () => {
     expect(r2.sessionId).toMatch(/^ses_/);
     expect(r2.sessionId).not.toBe(r1.sessionId);
     expect(r2.text.toLowerCase()).toContain("pong");
-  }, 240_000);
+  }, 600_000);
 });

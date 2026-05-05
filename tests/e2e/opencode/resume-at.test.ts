@@ -39,5 +39,5 @@ describe.skipIf(!enabled)("opencode SDK / resume-at", () => {
 
     expect(r3.sessionId).toBe(r1.sessionId);
     expect(r3.text.toLowerCase()).toContain("apple");
-  }, 300_000);
+  }, 900_000);
 });

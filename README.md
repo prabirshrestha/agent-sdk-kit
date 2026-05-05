@@ -23,7 +23,7 @@ Install only what the transports you actually use require. Everything below (exc
 | Package                                 | Declared as          | Install when you use                                                                        |
 | --------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------- |
 | `@github/copilot-sdk`                   | optional peer dep    | `copilot({ transport: "sdk" })` (copilot default)                                           |
-| `@opencode-ai/sdk`                      | optional peer dep    | `opencode({ transport: "sdk" })` (opencode default)                                         |
+| `@opencode-ai/sdk`                      | optional peer dep    | `opencode({ transport: "sdk" })` (opencode default; uses the v2 client API)                 |
 | `@zed-industries/agent-client-protocol` | optional peer dep    | `acp()` (e.g. wrapping `copilot --acp` or `opencode acp`)                                   |
 | `zod`                                   | regular `dependency` | always installed — used by `fromZod()` to convert Zod schemas via Zod v4's `z.toJSONSchema` |
 

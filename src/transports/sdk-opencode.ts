@@ -23,7 +23,7 @@ import { AgentError, notSupported } from "../errors.js";
 import { materializeAttachments, cleanupAttachments } from "../attachments.js";
 import { spawnProcess, type SpawnedProcess } from "../runtime.js";
 import { applySandbox } from "../sandbox/index.js";
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
+import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 
 // Prompt `parts` accepted by SDK's session.promptAsync body.
 // SDK signature: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>.
@@ -252,10 +252,7 @@ export function createOpencodeSdkTransport(config?: OpencodeConfig): ProviderImp
         );
       }
       try {
-        const resp = await c.session.delete({
-          path: { id: sessionId },
-          query: { directory: cwd },
-        });
+        const resp = await c.session.delete({ sessionID: sessionId, directory: cwd });
         const err = (resp as { error?: unknown }).error;
         if (err) {
           throw new AgentError(
@@ -338,10 +335,10 @@ async function* streamOpencodeSdk(
           "[agent-sdk] opencode SDK does not currently expose custom-tool registration; tools will be ignored",
         );
       }
-      const createResp = await client.session.create({
-        query: { directory: cwd },
-        signal: opts.abortSignal,
-      });
+      const createResp = await client.session.create(
+        { directory: cwd },
+        { signal: opts.abortSignal },
+      );
       sessionId = createResp.data?.id ?? "";
       if (!sessionId) {
         throw new AgentError("provider", "Opencode SDK failed to return a session ID on create");
@@ -360,12 +357,10 @@ async function* streamOpencodeSdk(
       // @opencode-ai/sdk SessionRevertData) which truncates the session at
       // that message in place — same session id is preserved.
       if (op.atMessageId) {
-        await client.session.revert({
-          path: { id: sessionId },
-          body: { messageID: op.atMessageId },
-          query: { directory: cwd },
-          signal: opts.abortSignal,
-        });
+        await client.session.revert(
+          { sessionID: sessionId, messageID: op.atMessageId, directory: cwd },
+          { signal: opts.abortSignal },
+        );
       }
       break;
     }
@@ -376,11 +371,14 @@ async function* streamOpencodeSdk(
       // Fork-at-message: opencode SDK exposes `body.messageID` on
       // POST /session/{id}/fork (see @opencode-ai/sdk SessionForkData).
       // When omitted, the fork branches from the end of the source.
-      const forkResp = await client.session.fork({
-        path: { id: op.sourceSessionId },
-        ...(op.atMessageId ? { body: { messageID: op.atMessageId } } : {}),
-        signal: opts.abortSignal,
-      });
+      const forkResp = await client.session.fork(
+        {
+          sessionID: op.sourceSessionId,
+          directory: cwd,
+          ...(op.atMessageId ? { messageID: op.atMessageId } : {}),
+        },
+        { signal: opts.abortSignal },
+      );
       sessionId = forkResp.data?.id ?? "";
       if (!sessionId) {
         throw new AgentError("provider", "Opencode SDK failed to return a session ID on fork");
@@ -414,10 +412,10 @@ async function* streamOpencodeSdk(
   // filter the global event stream by the session ID we just created/resumed,
   // which is unique to this stream call. If the SDK ever adds a correlationId
   // or requestId field, prefer that for stricter filtering. (TODO)
-  const subscribeResp = await client.event.subscribe({
-    query: { directory: cwd },
-    signal: opts.abortSignal,
-  });
+  const subscribeResp = await client.event.subscribe(
+    { directory: cwd },
+    { signal: opts.abortSignal },
+  );
   const eventStream = subscribeResp.stream;
 
   // Wire AbortSignal -> SDK session.abort + terminate event loop.
@@ -428,7 +426,7 @@ async function* streamOpencodeSdk(
     aborted = true;
     // Best-effort: tell the server to abort the session. Failures are ignored;
     // we still terminate the local for-await loop via the `aborted` flag.
-    client.session.abort({ path: { id: sessionId }, query: { directory: cwd } }).catch(() => {});
+    client.session.abort({ sessionID: sessionId, directory: cwd }).catch(() => {});
     // Force the event stream generator to terminate promptly.
     try {
       eventStream.return?.(undefined);
@@ -460,9 +458,10 @@ async function* streamOpencodeSdk(
     // distinction between replace/append, so both flow into the same field.
     const systemPrompt = opts.systemPrompt ?? opts.appendSystemPrompt;
     try {
-      await client.session.promptAsync({
-        path: { id: sessionId },
-        body: {
+      await client.session.promptAsync(
+        {
+          sessionID: sessionId,
+          directory: cwd,
           // SDK accepts TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput.
           // We only produce text + file parts; the cast is safe (structural match).
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -471,8 +470,8 @@ async function* streamOpencodeSdk(
           agent,
           ...(systemPrompt ? { system: systemPrompt } : {}),
         },
-        signal: opts.abortSignal,
-      });
+        { signal: opts.abortSignal },
+      );
     } catch (err) {
       // Emit error event but continue reading events
       const message = err instanceof Error ? err.message : String(err);
@@ -649,16 +648,16 @@ async function* processEvents(
           break;
         }
 
-        case "permission.updated": {
-          // SDK Permission shape: { id, type, pattern?, sessionID, messageID,
-          // callID?, title, metadata, time }. We forward as a permission_request
-          // event, and — if the caller supplied onPermissionRequest — post the
-          // decision back via POST /session/{id}/permissions/{permissionID}.
+        case "permission.asked": {
+          // v2 PermissionRequest shape: { id, sessionID, permission, patterns,
+          // metadata, always, tool? }. We forward as a permission_request event,
+          // and — if the caller supplied onPermissionRequest — post the decision
+          // back via client.permission.reply({ requestID, reply }).
           const permSessionId = props.sessionID as string | undefined;
           if (permSessionId && permSessionId !== sessionId) break;
           const permId = props.id as string | undefined;
-          const title = (props.title as string | undefined) ?? "permission_request";
-          const permType = (props.type as string | undefined) ?? "unknown";
+          const permName = (props.permission as string | undefined) ?? "permission_request";
+          const permType = (props.permission as string | undefined) ?? "unknown";
           if (!permId) break;
 
           // Build a respond() callback that hits the SDK endpoint. It's a
@@ -667,17 +666,15 @@ async function* processEvents(
           const cwd = ctx?.cwd;
           const respond = client
             ? async (decision: "allow" | "deny", respOpts?: { persist?: boolean }) => {
-                const response =
+                const reply: "once" | "always" | "reject" =
                   decision === "deny" ? "reject" : respOpts?.persist ? "always" : "once";
                 try {
-                  // Verified against @opencode-ai/sdk gen/sdk.gen.ts:
-                  //   public postSessionIdPermissionsPermissionId(options)
-                  //   url: "/session/{id}/permissions/{permissionID}"
-                  // (see packages/sdk/js/src/gen/sdk.gen.ts method name + URL).
-                  await client.postSessionIdPermissionsPermissionId({
-                    path: { id: sessionId, permissionID: permId },
-                    body: { response },
-                    query: cwd ? { directory: cwd } : undefined,
+                  // v2 SDK: client.permission.reply({ requestID, reply, directory }).
+                  // Replaces v1's auto-named postSessionIdPermissionsPermissionId.
+                  await client.permission.reply({
+                    requestID: permId,
+                    reply,
+                    ...(cwd ? { directory: cwd } : {}),
                   });
                 } catch {
                   // ignore — caller sees no ack, permission system is best-effort
@@ -686,7 +683,7 @@ async function* processEvents(
             : undefined;
 
           yield permissionRequestEvent(permId, permType, event, {
-            annotations: { justification: title },
+            annotations: { justification: permName },
             respond,
           });
 
@@ -699,7 +696,7 @@ async function* processEvents(
                 requestId: permId,
                 toolName: permType,
                 details: event,
-                annotations: { justification: title },
+                annotations: { justification: permName },
               });
               if (decision.decision === "allow") {
                 await respond("allow", { persist: decision.persist });

@@ -23,6 +23,7 @@ describe.skipIf(!enabled)("claude / basic", () => {
     const turn = agent.run({ prompt: "reply with exactly: pong" });
     const chunks: string[] = [];
     for await (const c of turn.textStream) chunks.push(c);
+    await turn.result;
     expect(chunks.join("").toLowerCase()).toContain("pong");
   }, 120_000);
 
