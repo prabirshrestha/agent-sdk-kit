@@ -313,6 +313,16 @@ async function* streamOpencodeSdk(
   // any future variant breaks the build instead of silently falling through.
   switch (op.kind) {
     case "start": {
+      // The opencode SDK does not expose a way to pin a caller-supplied
+      // session id on create — `SessionCreateData.body` only accepts
+      // `parentID` and `title`; the server assigns the id. Reject explicitly
+      // so callers don't silently get a different id than they passed.
+      if (op.pinnedSessionId) {
+        throw notSupported(
+          "opencode SDK does not support options.sessionId (pinning a UUID for a new session); the server assigns the session id.",
+          "pinned_session_id_unsupported",
+        );
+      }
       // TODO: opencode SDK does not currently expose user-facing custom-tool
       // registration. `SessionCreateData.body` only accepts `parentID` and
       // `title`; `SessionPromptAsyncData.body.tools` is a `Record<string, boolean>`
