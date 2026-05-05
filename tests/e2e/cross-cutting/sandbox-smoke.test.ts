@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { createAgent, claude, isProviderAvailable } from "../../src/index.js";
-import type { SandboxConfig, Provider } from "../../src/index.js";
+import { createAgent, claude, isProviderAvailable } from "../../../src/index.js";
+import type { SandboxConfig, Provider } from "../../../src/index.js";
 
 // Compile-time assertion: SandboxConfig shape.
 const sandbox: SandboxConfig = {

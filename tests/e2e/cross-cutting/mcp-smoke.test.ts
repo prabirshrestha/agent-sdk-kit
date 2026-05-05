@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { createAgent, claude, copilot, opencode, isProviderAvailable } from "../../src/index.js";
-import type { McpServerConfig, Provider } from "../../src/index.js";
+import { createAgent, claude, copilot, opencode, isProviderAvailable } from "../../../src/index.js";
+import type { McpServerConfig, Provider } from "../../../src/index.js";
 
 // Compile-time assertion: McpServerConfig accepts a stdio transport.
 const noopMcp: McpServerConfig = {

@@ -1,13 +1,13 @@
 import { describe, test, expect } from "bun:test";
-import { createAgent, copilot, claude, isProviderAvailable } from "../../src/index.js";
-import type { AgentEvent, AgentTool, Provider } from "../../src/index.js";
+import { createAgent, copilot, claude, isProviderAvailable } from "../../../src/index.js";
+import type { AgentEvent, AgentTool, Provider } from "../../../src/index.js";
 
 // Try to import the `tool` helper. If src/tools.ts isn't present yet, we fall
 // back to a manual AgentTool construction so the test can still exercise the
 // custom-tool wiring on a live provider.
 let toolFn: ((name: string, def: any) => AgentTool) | null = null;
 try {
-  const mod = await import("../../src/tools.js");
+  const mod = await import("../../../src/tools.js");
   toolFn = (mod as any).tool ?? null;
 } catch {
   toolFn = null;

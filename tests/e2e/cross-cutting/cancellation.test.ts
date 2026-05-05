@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { createAgent, claude, isProviderAvailable } from "../../src/index.js";
-import type { Provider } from "../../src/index.js";
+import { createAgent, claude, isProviderAvailable } from "../../../src/index.js";
+import type { Provider } from "../../../src/index.js";
 
 type Candidate = { name: "claude"; make: () => Provider };
 const candidates: Candidate[] = [

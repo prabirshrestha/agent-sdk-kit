@@ -1,0 +1,66 @@
+// opencode SDK: resume / multi-turn (2-turn + 3-turn) and fork.
+import { describe, test, expect } from "bun:test";
+import { createAgent, opencode } from "../../../src/index.js";
+import { e2eGate, withRetry, assertLifecycleOrdering, collectFullStream } from "../_helpers.js";
+
+const enabled = await e2eGate("opencode-sdk");
+const ocConfig = { cwd: "/tmp", model: "github-copilot/gpt-4o" } as const;
+
+describe.skipIf(!enabled)("opencode SDK / resume", () => {
+  test("2-turn resume preserves sessionId + context", async () => {
+    await using agent = createAgent({ provider: opencode(ocConfig) });
+    const r1 = await withRetry(() => agent.run({ prompt: "remember the word: banana" }).result);
+    const r2 = await withRetry(
+      () =>
+        agent.run({
+          prompt: "what word did I ask you to remember? reply with just the word",
+          options: { resume: r1.sessionId },
+        }).result,
+    );
+    expect(r2.sessionId).toBe(r1.sessionId);
+    expect(r2.text.toLowerCase()).toContain("banana");
+  }, 240_000);
+
+  test("3-turn resume preserves context + fullStream ordering", async () => {
+    await using agent = createAgent({ provider: opencode(ocConfig) });
+    const r1 = await withRetry(() => agent.run({ prompt: "remember the number 42" }).result);
+    const e2 = await withRetry(() =>
+      collectFullStream(
+        agent.run({
+          prompt: "now also remember the color blue",
+          options: { resume: r1.sessionId },
+        }),
+      ),
+    );
+    assertLifecycleOrdering(e2, { label: "opencode/resume t2" });
+
+    const r3 = await withRetry(
+      () =>
+        agent.run({
+          prompt: "what number and color did I tell you? reply: <number> <color>",
+          options: { resume: r1.sessionId },
+        }).result,
+    );
+
+    expect(r3.sessionId).toBe(r1.sessionId);
+    expect(r3.text.toLowerCase()).toContain("42");
+    expect(r3.text.toLowerCase()).toContain("blue");
+  }, 300_000);
+});
+
+describe.skipIf(!enabled)("opencode SDK / fork", () => {
+  test("fork creates a new sessionId distinct from the source", async () => {
+    await using agent = createAgent({ provider: opencode(ocConfig) });
+    const r1 = await withRetry(() => agent.run({ prompt: "reply with exactly: pong" }).result);
+    const r2 = await withRetry(
+      () =>
+        agent.run({
+          prompt: "reply with exactly: pong",
+          options: { resume: r1.sessionId, forkSession: true },
+        }).result,
+    );
+    expect(r2.sessionId).toMatch(/^ses_/);
+    expect(r2.sessionId).not.toBe(r1.sessionId);
+    expect(r2.text.toLowerCase()).toContain("pong");
+  }, 240_000);
+});

@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as crypto from "node:crypto";
-import { createAgent, claude, copilot, isProviderAvailable } from "../../src/index.js";
-import type { Attachment, Provider } from "../../src/index.js";
+import { createAgent, claude, copilot, isProviderAvailable } from "../../../src/index.js";
+import type { Attachment, Provider } from "../../../src/index.js";
 
 type Candidate = { name: "claude" | "copilot"; make: () => Provider };
 

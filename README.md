@@ -245,12 +245,12 @@ await agent.send("write a haiku", { model: "claude-haiku-4-5" }).text;
 
 Format per provider:
 
-| Provider     | `model` value                                                                |
-| ------------ | ---------------------------------------------------------------------------- |
-| **claude**   | model id (e.g. `"claude-sonnet-4-5"`) — passed as `--model`                  |
-| **copilot**  | model id passed to the SDK's `createSession` / `resumeSession` config        |
-| **opencode** | `"providerID/modelID"` (e.g. `"github-copilot/gpt-4o"`) or just `modelID`    |
-| **pi**       | model id — passed as `--model`                                               |
+| Provider     | `model` value                                                                       |
+| ------------ | ----------------------------------------------------------------------------------- |
+| **claude**   | model id (e.g. `"claude-sonnet-4-5"`) — passed as `--model`                         |
+| **copilot**  | model id passed to the SDK's `createSession` / `resumeSession` config               |
+| **opencode** | `"providerID/modelID"` (e.g. `"github-copilot/gpt-4o"`) or just `modelID`           |
+| **pi**       | model id — passed as `--model`                                                      |
 | **acp()**    | whatever model id the agent advertises (only if it supports `set_model`) — see [12] |
 
 ## Detect available agents
@@ -510,6 +510,41 @@ const agent = createAgent({
 });
 
 await agent.run({ prompt: "hello" }).text;
+```
+
+## Testing
+
+```bash
+bun test:unit          # fast, hermetic — always runs
+bun test:e2e           # gated by env vars (see below)
+```
+
+Unit tests have no external dependencies. End-to-end tests spawn real CLIs/SDKs and require both:
+
+1. The CLI/SDK to be installed and authenticated, and
+2. An explicit env opt-in (so CI doesn't accidentally hit live APIs).
+
+Set `RUN_E2E=1` to opt every provider in, or one of:
+
+| Env var                  | Enables                                                     |
+| ------------------------ | ----------------------------------------------------------- |
+| `RUN_E2E_CLAUDE=1`       | `tests/e2e/claude/**` — needs `claude` CLI + Anthropic key  |
+| `RUN_E2E_COPILOT_SDK=1`  | `tests/e2e/copilot/**` — needs `@github/copilot-sdk` + auth |
+| `RUN_E2E_OPENCODE_SDK=1` | `tests/e2e/opencode/**` — needs `@opencode-ai/sdk` + auth   |
+| `RUN_E2E_PI=1`           | `tests/e2e/pi/**` — needs `pi` CLI + provider API key       |
+| `RUN_E2E_ACP=1`          | `tests/e2e/acp/**` — defaults to `copilot --acp`            |
+
+E2E tests are organized by provider so each row of the [feature matrix](#feature-matrix) maps to a folder, and each cell maps to a file:
+
+```
+tests/e2e/
+  _helpers.ts                # env gates, withRetry, fullStream assertions
+  claude/        basic | resume | fork | model-override | not-supported
+  copilot/       basic | resume | fork | pinned-session | resume-at | model-override
+  opencode/      basic | resume | resume-at | model-override | not-supported
+  pi/            basic | resume | fork | model-override | not-supported
+  acp/           basic | model-override | not-supported
+  cross-cutting/ cancellation | mcp-smoke | attachments | custom-tools | sandbox-smoke
 ```
 
 ## License
