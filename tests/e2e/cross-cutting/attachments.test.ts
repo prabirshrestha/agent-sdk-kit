@@ -5,16 +5,22 @@ import * as fs from "node:fs/promises";
 import * as crypto from "node:crypto";
 import { createAgent, claude, copilot, isProviderAvailable } from "../../../src/index.js";
 import type { Attachment, Provider } from "../../../src/index.js";
+import { envFlag } from "../_helpers.js";
 
-type Candidate = { name: "claude" | "copilot"; make: () => Provider };
+type Candidate = { name: "claude" | "copilot"; gate: string; make: () => Provider };
 
 const candidates: Candidate[] = [
-  { name: "claude", make: () => claude({ cwd: os.tmpdir(), model: "claude-haiku-4-5" }) },
-  { name: "copilot", make: () => copilot({ cwd: os.tmpdir() }) },
+  {
+    name: "claude",
+    gate: "RUN_E2E_CLAUDE",
+    make: () => claude({ cwd: os.tmpdir(), model: "claude-haiku-4-5" }),
+  },
+  { name: "copilot", gate: "RUN_E2E_COPILOT_SDK", make: () => copilot({ cwd: os.tmpdir() }) },
 ];
 
 let chosen: Candidate | null = null;
 for (const c of candidates) {
+  if (!(envFlag(c.gate) || envFlag("RUN_E2E"))) continue;
   if (await isProviderAvailable(c.name).catch(() => false)) {
     chosen = c;
     break;

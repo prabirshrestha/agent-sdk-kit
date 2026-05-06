@@ -18,6 +18,7 @@ import {
   errorEvent,
   rawEvent,
   permissionRequestEvent,
+  userMessageEvent,
 } from "../events.js";
 import { AgentError, notSupported } from "../errors.js";
 import { materializeAttachments, cleanupAttachments } from "../attachments.js";
@@ -526,6 +527,21 @@ async function* processEvents(
       lastRaw = event;
 
       switch (eventType) {
+        case "message.updated": {
+          // v2 EventMessageUpdated: { properties: { sessionID, info: Message } }
+          // Message is UserMessage | AssistantMessage. Surface user-role messages
+          // so callers (and tests) can capture the server-assigned messageId for
+          // resumeSessionAt rewinds.
+          const info = props.info as Record<string, unknown> | undefined;
+          if (info && info.role === "user") {
+            const msgId = info.id as string | undefined;
+            if (msgId) {
+              yield userMessageEvent("", msgId);
+            }
+          }
+          break;
+        }
+
         case "message.part.updated": {
           const part = props.part as Record<string, unknown> | undefined;
           const partType = part?.type as string | undefined;

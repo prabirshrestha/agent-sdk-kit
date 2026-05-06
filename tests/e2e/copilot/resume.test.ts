@@ -1,9 +1,14 @@
 // copilot SDK: resume / multi-turn (2-turn + 3-turn).
 import { describe, test, expect } from "bun:test";
 import { createAgent, copilot } from "../../../src/index.js";
-import { e2eGate, assertLifecycleOrdering, collectFullStream } from "../_helpers.js";
+import {
+  e2eGate,
+  assertLifecycleOrdering,
+  collectFullStream,
+  slowE2eEnabled,
+} from "../_helpers.js";
 
-const enabled = await e2eGate("copilot-sdk");
+const enabled = (await e2eGate("copilot-sdk")) && slowE2eEnabled();
 
 describe.skipIf(!enabled)("copilot SDK / resume", () => {
   test("2-turn resume preserves sessionId + context", async () => {

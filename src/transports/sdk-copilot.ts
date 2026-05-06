@@ -604,31 +604,31 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
         }
       }
       if (client) {
-        // Suppress vscode-jsonrpc's "Pending response rejected since connection
-        // got disposed" rejections. The Copilot SDK's stop() synchronously
-        // fires the JSONRPC disposeEmitter, which rejects any in-flight RPC
-        // response promise — and we have no handle to attach a `.catch()` on
-        // those internal promises. They're benign on shutdown.
-        const swallow = (reason: unknown) => {
-          const err = reason as { code?: number; message?: string } | undefined;
-          if (
-            err?.code === -32097 ||
-            (typeof err?.message === "string" && err.message.includes("Pending response rejected"))
-          ) {
-            return;
+        // Before tearing down the JSONRPC connection, wait for any in-flight
+        // RPC responses to settle. The Copilot SDK's stop() synchronously
+        // fires the JSONRPC disposeEmitter, which rejects all pending
+        // response promises with code -32097 ("Pending response rejected
+        // since connection got disposed"). Those rejections have no .catch()
+        // attached and surface as unhandled rejections — which bun's test
+        // runner counts as test failures regardless of process.on listeners.
+        // Draining them first avoids the race entirely.
+        try {
+          const conn = (
+            client as unknown as { connection?: { hasPendingResponse?: () => boolean } }
+          ).connection;
+          if (conn?.hasPendingResponse) {
+            const deadline = Date.now() + 2000;
+            while (conn.hasPendingResponse() && Date.now() < deadline) {
+              await new Promise((r) => setTimeout(r, 10));
+            }
           }
-          throw reason;
-        };
-        process.on("unhandledRejection", swallow);
+        } catch {
+          // Best-effort
+        }
         try {
           await client.stop();
         } catch {
           // Ignore stop errors
-        } finally {
-          // Give microtasks a tick to settle any rejections fired by stop()
-          // before removing the swallower.
-          await new Promise((r) => setImmediate(r));
-          process.off("unhandledRejection", swallow);
         }
       }
       if (sandboxCleanup) {
@@ -667,25 +667,23 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
         await client.deleteSession(sessionId);
       } finally {
         if (client) {
-          const swallow = (reason: unknown) => {
-            const err = reason as { code?: number; message?: string } | undefined;
-            if (
-              err?.code === -32097 ||
-              (typeof err?.message === "string" &&
-                err.message.includes("Pending response rejected"))
-            ) {
-              return;
+          try {
+            const conn = (
+              client as unknown as { connection?: { hasPendingResponse?: () => boolean } }
+            ).connection;
+            if (conn?.hasPendingResponse) {
+              const deadline = Date.now() + 2000;
+              while (conn.hasPendingResponse() && Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 10));
+              }
             }
-            throw reason;
-          };
-          process.on("unhandledRejection", swallow);
+          } catch {
+            // Best-effort
+          }
           try {
             await client.stop();
           } catch {
             // Ignore stop errors
-          } finally {
-            await new Promise((r) => setImmediate(r));
-            process.off("unhandledRejection", swallow);
           }
         }
         if (sandboxCleanup) {

@@ -1,9 +1,14 @@
 // pi CLI: resume / multi-turn (2-turn + 3-turn).
 import { describe, test, expect } from "bun:test";
 import { createAgent, pi } from "../../../src/index.js";
-import { e2eGate, assertLifecycleOrdering, collectFullStream } from "../_helpers.js";
+import {
+  e2eGate,
+  assertLifecycleOrdering,
+  collectFullStream,
+  slowE2eEnabled,
+} from "../_helpers.js";
 
-const enabled = await e2eGate("pi");
+const enabled = (await e2eGate("pi")) && slowE2eEnabled();
 const provider = () => pi({ cwd: process.cwd() });
 
 describe.skipIf(!enabled)("pi / resume", () => {

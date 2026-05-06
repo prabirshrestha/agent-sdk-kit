@@ -1,9 +1,15 @@
 // opencode SDK: resume / multi-turn (2-turn + 3-turn) and fork.
 import { describe, test, expect } from "bun:test";
 import { createAgent, opencode } from "../../../src/index.js";
-import { e2eGate, withRetry, assertLifecycleOrdering, collectFullStream } from "../_helpers.js";
+import {
+  e2eGate,
+  withRetry,
+  assertLifecycleOrdering,
+  collectFullStream,
+  slowE2eEnabled,
+} from "../_helpers.js";
 
-const enabled = await e2eGate("opencode-sdk");
+const enabled = (await e2eGate("opencode-sdk")) && slowE2eEnabled();
 const ocConfig = { cwd: "/tmp", model: "github-copilot/gpt-4o" } as const;
 
 describe.skipIf(!enabled)("opencode SDK / resume", () => {
