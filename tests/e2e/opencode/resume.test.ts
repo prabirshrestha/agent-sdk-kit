@@ -8,10 +8,9 @@ import {
   consumeTurnWithRetry,
   assertLifecycleOrdering,
   collectFullStream,
-  slowE2eEnabled,
 } from "../_helpers.js";
 
-const enabled = (await e2eGate("opencode-sdk")) && slowE2eEnabled();
+const enabled = await e2eGate("opencode-sdk");
 const ocConfig = { cwd: "/tmp", model: "github-copilot/gpt-5-mini" } as const;
 
 describe.skipIf(!enabled)("opencode SDK / resume", () => {

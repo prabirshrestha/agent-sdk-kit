@@ -534,11 +534,9 @@ Set `RUN_E2E=1` to opt every provider in, or one of:
 | `RUN_E2E_PI=1`           | `tests/e2e/pi/**` — needs `pi` CLI + provider API key       |
 | `RUN_E2E_ACP=1`          | `tests/e2e/acp/**` — defaults to `copilot --acp`            |
 
-In addition, multi-turn `resume.test.ts` and `resume-at.test.ts` files require
-**both** the per-provider opt-in **and** `RUN_E2E_SLOW=1` (or `RUN_E2E_FULL=1`).
-These tests depend on multiple successful LLM round-trips and are sensitive to
-upstream rate limits; they are gated separately so the default e2e run stays
-100% reliable.
+Multi-turn `resume.test.ts` and `resume-at.test.ts` files run with the same
+per-provider opt-in. They depend on multiple successful LLM round-trips, so they
+can take longer and may retry when upstream providers stall or rate-limit.
 
 E2E tests are organized by provider so each row of the [feature matrix](#feature-matrix) maps to a folder, and each cell maps to a file:
 

@@ -5,10 +5,9 @@ import {
   e2eGate,
   assertLifecycleOrdering,
   collectFullStream,
-  slowE2eEnabled,
 } from "../_helpers.js";
 
-const enabled = (await e2eGate("pi")) && slowE2eEnabled();
+const enabled = await e2eGate("pi");
 const provider = () => pi({ cwd: process.cwd() });
 
 describe.skipIf(!enabled)("pi / resume", () => {

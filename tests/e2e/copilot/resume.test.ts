@@ -5,10 +5,9 @@ import {
   e2eGate,
   assertLifecycleOrdering,
   collectFullStream,
-  slowE2eEnabled,
 } from "../_helpers.js";
 
-const enabled = (await e2eGate("copilot-sdk")) && slowE2eEnabled();
+const enabled = await e2eGate("copilot-sdk");
 
 describe.skipIf(!enabled)("copilot SDK / resume", () => {
   test("2-turn resume preserves sessionId + context", async () => {

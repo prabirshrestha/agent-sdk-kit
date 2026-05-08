@@ -5,10 +5,9 @@ import {
   e2eGate,
   assertLifecycleOrdering,
   collectFullStream,
-  slowE2eEnabled,
 } from "../_helpers.js";
 
-const enabled = (await e2eGate("claude")) && slowE2eEnabled();
+const enabled = await e2eGate("claude");
 const provider = () => claude({ cwd: "/tmp", model: "claude-haiku-4-5" });
 
 describe.skipIf(!enabled)("claude / resume", () => {

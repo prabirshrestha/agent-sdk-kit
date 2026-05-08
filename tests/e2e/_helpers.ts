@@ -45,25 +45,10 @@ export function envFlag(name: string): boolean {
  * Honored env vars (any one is enough):
  *   - RUN_E2E=1                          → enable all providers
  *   - RUN_E2E_<PROVIDER>=1               → enable a specific provider
- *
- * Tests that depend on multiple LLM round-trips (resume-at, multi-turn resume,
- * etc.) additionally consult `slowE2eEnabled()`, which requires RUN_E2E_SLOW=1
- * (or RUN_E2E_FULL=1). They are skipped by default to keep the baseline e2e
- * suite 100% reliable; their failure is almost always upstream rate-limiting,
- * not our code.
  */
 function envOptedIn(provider: string): boolean {
   if (envFlag("RUN_E2E")) return true;
   return envFlag(`RUN_E2E_${provider.toUpperCase().replace(/-/g, "_")}`);
-}
-
-/**
- * Whether to run "slow" e2e tests that depend on multiple successful LLM
- * round-trips (resume-at, multi-turn resume). Default false — these tests
- * are rate-limit-sensitive and can hang under shared quotas.
- */
-export function slowE2eEnabled(): boolean {
-  return envFlag("RUN_E2E_SLOW") || envFlag("RUN_E2E_FULL");
 }
 
 /**

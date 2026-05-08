@@ -6,9 +6,9 @@
 // history) and asks for the word — should NOT recall it.
 import { describe, test, expect } from "bun:test";
 import { createAgent, copilot } from "../../../src/index.js";
-import { e2eGate, slowE2eEnabled } from "../_helpers.js";
+import { e2eGate } from "../_helpers.js";
 
-const enabled = (await e2eGate("copilot-sdk")) && slowE2eEnabled();
+const enabled = await e2eGate("copilot-sdk");
 
 describe.skipIf(!enabled)("copilot SDK / resume-at", () => {
   test("resumeSessionAt rewinds in place (same sessionId) via history.truncate", async () => {
