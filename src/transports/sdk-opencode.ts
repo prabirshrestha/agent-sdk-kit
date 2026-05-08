@@ -408,6 +408,23 @@ async function* streamOpencodeSdk(
   );
 
   // Subscribe to events BEFORE calling promptAsync (race-safe).
+  //
+  // NOTE: The opencode v2 SDK's `event.subscribe` is *lazy* — it returns an
+  // async generator whose underlying SSE fetch isn't issued until the first
+  // `.next()` call (see @opencode-ai/sdk/dist/v2/gen/core/serverSentEvents.gen.js,
+  // `createSseClient`). If we fall straight through to `promptAsync` and only
+  // start iterating afterwards, the server can dispatch (and finish) a fast
+  // turn before our SSE connection is even open, dropping every event for that
+  // turn — including `step-finish` and `session.idle` — which leaves
+  // `.result` hanging forever. This was reproducible on resumed turns where
+  // the server replies in <100ms.
+  //
+  // Fix: pre-pull the first event (`server.connected`, emitted on connect)
+  // BEFORE calling promptAsync. Awaiting that promise forces the underlying
+  // fetch to be issued; once it resolves we know the SSE channel is live.
+  // We then prepend that already-consumed event back onto the iterator so
+  // `processEvents` sees the full stream.
+  //
   // NOTE: The OpenCode SDK does not expose a per-request correlation/request
   // ID on either `event.subscribe` or `session.promptAsync`. We therefore
   // filter the global event stream by the session ID we just created/resumed,
@@ -417,7 +434,34 @@ async function* streamOpencodeSdk(
     { directory: cwd },
     { signal: opts.abortSignal },
   );
-  const eventStream = subscribeResp.stream;
+  const rawStream = subscribeResp.stream;
+
+  // Force the SSE HTTP request to be issued and the connection to be
+  // established. The first event from opencode is `server.connected`, which
+  // arrives as soon as the server accepts the SSE handshake.
+  const firstResult = await rawStream.next();
+
+  // Wrap the generator so the prefetched first event is replayed to consumers
+  // (processEvents). If the stream ended on the very first pull (firstResult.done
+  // === true), there's nothing to replay — fall back to the raw stream so its
+  // own .return() semantics still apply.
+  const eventStream: typeof rawStream = firstResult.done
+    ? rawStream
+    : (async function* () {
+        try {
+          yield firstResult.value;
+          yield* rawStream;
+        } finally {
+          // Propagate consumer-initiated termination (early break / .return())
+          // through to the underlying SSE generator so the HTTP connection is
+          // closed promptly instead of leaking until process exit.
+          try {
+            await rawStream.return?.(undefined);
+          } catch {
+            // ignore
+          }
+        }
+      })();
 
   // Wire AbortSignal -> SDK session.abort + terminate event loop.
   // We track cleanup so the listener is removed when the stream finishes
@@ -508,6 +552,11 @@ async function* processEvents(
   let lastRaw: unknown;
   let lastStopReason: string | undefined;
   let stepFinishSeen = false;
+  // Track the role of each message we've seen so we can skip parts attached to
+  // user messages. Opencode emits `message.part.updated` for the user's own
+  // text/file parts as well as the assistant's parts; without filtering, the
+  // user's prompt text leaks into the assistant text stream and `result.text`.
+  const messageRoles = new Map<string, "user" | "assistant">();
 
   try {
     for await (const event of eventStream) {
@@ -529,12 +578,18 @@ async function* processEvents(
       switch (eventType) {
         case "message.updated": {
           // v2 EventMessageUpdated: { properties: { sessionID, info: Message } }
-          // Message is UserMessage | AssistantMessage. Surface user-role messages
-          // so callers (and tests) can capture the server-assigned messageId for
-          // resumeSessionAt rewinds.
+          // Message is UserMessage | AssistantMessage. Track role-by-id so we
+          // can later distinguish user-attached parts from assistant-attached
+          // parts (see `message.part.updated` below). Surface user-role
+          // messages so callers (and tests) can capture the server-assigned
+          // messageId for resumeSessionAt rewinds.
           const info = props.info as Record<string, unknown> | undefined;
-          if (info && info.role === "user") {
-            const msgId = info.id as string | undefined;
+          const role = info?.role as "user" | "assistant" | undefined;
+          const msgId = info?.id as string | undefined;
+          if (msgId && (role === "user" || role === "assistant")) {
+            messageRoles.set(msgId, role);
+          }
+          if (info && role === "user") {
             if (msgId) {
               yield userMessageEvent("", msgId);
             }
@@ -546,12 +601,27 @@ async function* processEvents(
           const part = props.part as Record<string, unknown> | undefined;
           const partType = part?.type as string | undefined;
           const partSessionId = part?.sessionID as string | undefined;
+          const partMessageId = part?.messageID as string | undefined;
 
           if (partSessionId !== sessionId) {
             continue; // skip parts from other sessions
           }
 
           if (!part) continue;
+
+          // Skip parts attached to user messages — opencode echoes the user's
+          // prompt back through `message.part.updated` events with the same
+          // shape as assistant parts. Treating them as assistant content
+          // pollutes `accumulatedText` / `text_delta` (e.g. on a resumed turn
+          // the previous user prompt becomes the "assistant reply").
+          //
+          // If we haven't seen the message.updated event yet for this id, fall
+          // back to treating the part as assistant — opencode v2 currently
+          // emits message.updated before any message.part.updated for the same
+          // message, so this fallback should be unreachable in practice.
+          if (partMessageId && messageRoles.get(partMessageId) === "user") {
+            break;
+          }
 
           if (partType === "text") {
             const text = part.text as string | undefined;
