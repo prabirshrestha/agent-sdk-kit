@@ -553,6 +553,7 @@ async function* processEvents(
   let lastRaw: unknown;
   let lastStopReason: string | undefined;
   let stepFinishSeen = false;
+  let currentAssistantMessageId: string | undefined;
   // Track the role of each message we've seen so we can skip parts attached to
   // user messages. Opencode emits `message.part.updated` for the user's own
   // text/file parts as well as the assistant's parts; without filtering, the
@@ -624,7 +625,22 @@ async function* processEvents(
             break;
           }
 
-          if (partType === "text") {
+          const isCurrentAssistantPart =
+            !!partMessageId && partMessageId === currentAssistantMessageId;
+
+          if (partType === "step-start") {
+            currentAssistantMessageId = partMessageId;
+            accumulatedText = "";
+            previousText = "";
+            previousReasoning = "";
+            yield turnStartEvent();
+          } else if (!isCurrentAssistantPart) {
+            // On resumed sessions opencode may replay/update older assistant
+            // messages before the new turn starts. Ignore all assistant content
+            // until we see the current turn's step-start and can correlate by
+            // messageID; otherwise prior replies can become this turn's result.
+            break;
+          } else if (partType === "text") {
             const text = part.text as string | undefined;
             if (text) {
               // Compute delta
@@ -645,8 +661,6 @@ async function* processEvents(
                 yield thinkingDeltaEvent(delta, part.messageID as string | undefined);
               }
             }
-          } else if (partType === "step-start") {
-            yield turnStartEvent();
           } else if (partType === "step-finish") {
             const reason = (part.reason as string) ?? "stop";
             lastStopReason = mapStopReason(reason);
