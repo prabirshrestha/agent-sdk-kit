@@ -491,18 +491,12 @@ async function* streamOpencodeSdk(
   }
 
   try {
-    // Start processing events in parallel
-    const eventPromise = processEvents(eventStream, sessionId, () => aborted, {
-      client,
-      cwd,
-      onPermissionRequest: opts.onPermissionRequest,
-    });
-
     // Send the prompt. The SDK's promptAsync body accepts an optional `system`
     // string (see @opencode-ai/sdk types.gen.d.ts: SessionPromptAsyncData.body).
     // Map opts.systemPrompt / opts.appendSystemPrompt onto it; the SDK has no
     // distinction between replace/append, so both flow into the same field.
     const systemPrompt = opts.systemPrompt ?? opts.appendSystemPrompt;
+    const promptStartedAt = Date.now();
     try {
       await client.session.promptAsync(
         {
@@ -525,7 +519,12 @@ async function* streamOpencodeSdk(
     }
 
     // Yield all events from the event stream
-    yield* eventPromise;
+    yield* processEvents(eventStream, sessionId, () => aborted, {
+      client,
+      cwd,
+      promptStartedAt,
+      onPermissionRequest: opts.onPermissionRequest,
+    });
   } finally {
     // Remove the abort listener regardless of how we exit (promptAsync throw,
     // eventPromise throw, early .return() from consumer, or normal completion).
@@ -544,6 +543,7 @@ async function* processEvents(
   ctx?: {
     client: OpencodeClient;
     cwd: string;
+    promptStartedAt?: number;
     onPermissionRequest?: CallOptions["onPermissionRequest"];
   },
 ): AsyncIterable<AgentEvent> {
@@ -553,12 +553,22 @@ async function* processEvents(
   let lastRaw: unknown;
   let lastStopReason: string | undefined;
   let stepFinishSeen = false;
-  let currentAssistantMessageId: string | undefined;
+  let activeAssistantMessageId: string | undefined;
   // Track the role of each message we've seen so we can skip parts attached to
   // user messages. Opencode emits `message.part.updated` for the user's own
   // text/file parts as well as the assistant's parts; without filtering, the
   // user's prompt text leaks into the assistant text stream and `result.text`.
   const messageRoles = new Map<string, "user" | "assistant">();
+  // `event.subscribe` is session-wide. On resumed sessions opencode may replay
+  // message.updated / message.part.updated for historical messages before the
+  // current prompt's events. Correlate assistant parts to the current prompt by
+  // using opencode's message graph: current user message(s) are created after
+  // promptAsync starts, and the current assistant message has parentID set to
+  // one of those user message IDs.
+  const currentUserMessageIds = new Set<string>();
+  const assistantParentIds = new Map<string, string | undefined>();
+  const candidateAssistantMessageIds = new Set<string>();
+  const promptStartedAt = ctx?.promptStartedAt ?? 0;
 
   try {
     for await (const event of eventStream) {
@@ -588,12 +598,28 @@ async function* processEvents(
           const info = props.info as Record<string, unknown> | undefined;
           const role = info?.role as "user" | "assistant" | undefined;
           const msgId = info?.id as string | undefined;
+          const createdAt = getMessageCreatedAt(info);
           if (msgId && (role === "user" || role === "assistant")) {
             messageRoles.set(msgId, role);
           }
-          if (info && role === "user") {
-            if (msgId) {
+          if (info && role === "user" && msgId) {
+            if (createdAt === undefined || createdAt >= promptStartedAt) {
+              currentUserMessageIds.add(msgId);
               yield userMessageEvent("", msgId);
+
+              for (const [assistantId, parentId] of assistantParentIds) {
+                if (parentId === msgId) candidateAssistantMessageIds.add(assistantId);
+              }
+            }
+          } else if (info && role === "assistant" && msgId) {
+            const parentId = info.parentID as string | undefined;
+            assistantParentIds.set(msgId, parentId);
+            if (
+              (createdAt === undefined || createdAt >= promptStartedAt) &&
+              parentId &&
+              currentUserMessageIds.has(parentId)
+            ) {
+              candidateAssistantMessageIds.add(msgId);
             }
           }
           break;
@@ -626,19 +652,21 @@ async function* processEvents(
           }
 
           const isCurrentAssistantPart =
-            !!partMessageId && partMessageId === currentAssistantMessageId;
+            !!partMessageId && partMessageId === activeAssistantMessageId;
 
           if (partType === "step-start") {
-            currentAssistantMessageId = partMessageId;
+            if (!partMessageId || !candidateAssistantMessageIds.has(partMessageId)) {
+              break;
+            }
+            activeAssistantMessageId = partMessageId;
             accumulatedText = "";
             previousText = "";
             previousReasoning = "";
             yield turnStartEvent();
           } else if (!isCurrentAssistantPart) {
-            // On resumed sessions opencode may replay/update older assistant
-            // messages before the new turn starts. Ignore all assistant content
-            // until we see the current turn's step-start and can correlate by
-            // messageID; otherwise prior replies can become this turn's result.
+            // Ignore historical assistant content. Only parts for the assistant
+            // message whose step-start belongs to the current prompt can
+            // contribute to this stream's text/tool/result events.
             break;
           } else if (partType === "text") {
             const text = part.text as string | undefined;
@@ -844,6 +872,12 @@ function getSessionId(props: Record<string, unknown>): string | undefined {
   const part = props.part as Record<string, unknown> | undefined;
   if (part?.sessionID) return part.sessionID as string;
   return undefined;
+}
+
+function getMessageCreatedAt(info: Record<string, unknown> | undefined): number | undefined {
+  const time = info?.time as Record<string, unknown> | undefined;
+  const created = time?.created;
+  return typeof created === "number" ? created : undefined;
 }
 
 function mapStopReason(reason: string | undefined): string {
