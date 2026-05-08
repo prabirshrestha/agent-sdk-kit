@@ -6,7 +6,7 @@ import { createAgent, opencode } from "../../../src/index.js";
 import { e2eGate } from "../_helpers.js";
 
 const enabled = await e2eGate("opencode-sdk");
-const ocConfig = { cwd: "/tmp", model: "github-copilot/gpt-4o" } as const;
+const ocConfig = { cwd: "/tmp", model: "github-copilot/gpt-5-mini" } as const;
 
 describe.skipIf(!enabled)("opencode SDK / not-supported", () => {
   test("pinnedSessionId throws not_supported (matrix says ✗)", async () => {

@@ -1,7 +1,7 @@
 // ACP: matrix cells documented as ✗ (not_supported).
 import { describe, test, expect } from "bun:test";
 import { createAgent, acp } from "../../../src/index.js";
-import { e2eGate, withRetry } from "../_helpers.js";
+import { e2eGate, runTurnWithRetry } from "../_helpers.js";
 
 const enabled = await e2eGate("acp");
 const provider = () => acp({ spawn: ["copilot", "--acp"] });
@@ -29,7 +29,7 @@ describe.skipIf(!enabled)("acp / not-supported", () => {
 
   test("forkSession → not_supported (each call spawns a fresh ACP process)", async () => {
     await using agent = createAgent({ provider: provider() });
-    const r1 = await withRetry(() => agent.run({ prompt: "reply with exactly: pong" }).result);
+    const r1 = await runTurnWithRetry(() => agent.run({ prompt: "reply with exactly: pong" }));
     await expect(
       agent.run({
         prompt: "reply with exactly: pong",

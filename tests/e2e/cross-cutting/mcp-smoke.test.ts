@@ -13,7 +13,7 @@ const candidates: Candidate[] = [
   { name: "claude", make: () => claude({ cwd: "/tmp", model: "claude-haiku-4-5" }) },
   {
     name: "opencode",
-    make: () => opencode({ cwd: "/tmp", model: "github-copilot/gpt-4o" }),
+    make: () => opencode({ cwd: "/tmp", model: "github-copilot/gpt-5-mini" }),
   },
   { name: "copilot", make: () => copilot({ cwd: "/tmp" }) },
 ];

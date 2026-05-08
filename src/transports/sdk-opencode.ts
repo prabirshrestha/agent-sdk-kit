@@ -139,6 +139,7 @@ export function createOpencodeSdkTransport(config?: OpencodeConfig): ProviderImp
           stdin: "ignore",
           stderr: "pipe",
           env: envRecord,
+          detached: true,
         });
 
         let resolvedPort: number | undefined = explicitPort;

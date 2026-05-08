@@ -1,7 +1,13 @@
 // ACP (generic, via copilot --acp): basic lifecycle.
 import { describe, test, expect } from "bun:test";
 import { createAgent, acp } from "../../../src/index.js";
-import { e2eGate, withRetry, assertLifecycleOrdering, collectFullStream } from "../_helpers.js";
+import {
+  e2eGate,
+  runTurnWithRetry,
+  consumeTurnWithRetry,
+  assertLifecycleOrdering,
+  collectFullStream,
+} from "../_helpers.js";
 
 const enabled = await e2eGate("acp");
 const provider = () => acp({ spawn: ["copilot", "--acp"] });
@@ -9,7 +15,7 @@ const provider = () => acp({ spawn: ["copilot", "--acp"] });
 describe.skipIf(!enabled)("acp / basic", () => {
   test("start → sessionId + text contains pong + provider tag", async () => {
     await using agent = createAgent({ provider: provider() });
-    const result = await withRetry(() => agent.run({ prompt: "reply with exactly: pong" }).result);
+    const result = await runTurnWithRetry(() => agent.run({ prompt: "reply with exactly: pong" }));
     expect(result.sessionId).toBeTruthy();
     expect(result.text.toLowerCase()).toContain("pong");
     expect(result.provider).toBe("acp");
@@ -17,21 +23,24 @@ describe.skipIf(!enabled)("acp / basic", () => {
 
   test("textStream concatenates to final text", async () => {
     await using agent = createAgent({ provider: provider() });
-    const text = await withRetry(async () => {
-      const turn = agent.run({ prompt: "reply with exactly: pong" });
+    const text = await consumeTurnWithRetry(
+      () => agent.run({ prompt: "reply with exactly: pong" }),
+      async (turn) => {
       turn.result.catch(() => {});
       const chunks: string[] = [];
       for await (const c of turn.textStream) chunks.push(c);
       await turn.result;
       return chunks.join("");
-    });
+      },
+    );
     expect(text.toLowerCase()).toContain("pong");
   }, 60_000);
 
   test("fullStream: session → turn_start → ... → result (no turn_end on ACP today)", async () => {
     await using agent = createAgent({ provider: provider() });
-    const events = await withRetry(() =>
-      collectFullStream(agent.run({ prompt: "reply with exactly: pong" })),
+    const events = await consumeTurnWithRetry(
+      () => agent.run({ prompt: "reply with exactly: pong" }),
+      (turn) => collectFullStream(turn),
     );
     const types = events.map((e) => e.type);
     const session = types.indexOf("session");

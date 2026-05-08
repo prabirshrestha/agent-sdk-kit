@@ -544,7 +544,7 @@ E2E tests are organized by provider so each row of the [feature matrix](#feature
 
 ```
 tests/e2e/
-  _helpers.ts                # env gates, withRetry, fullStream assertions
+  _helpers.ts                # env gates, retry helpers, fullStream assertions
   claude/        basic | resume | fork | model-override | not-supported
   copilot/       basic | resume | fork | pinned-session | resume-at | model-override
   opencode/      basic | resume | resume-at | model-override | not-supported

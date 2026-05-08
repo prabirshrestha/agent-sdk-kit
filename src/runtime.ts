@@ -39,6 +39,8 @@ export interface SpawnOpts {
   stdin?: "pipe" | "inherit" | "ignore";
   /** Control stderr disposition. Default: "pipe". */
   stderr?: "pipe" | "inherit" | "ignore";
+  /** Start the process in its own process group so kill() can terminate descendants. */
+  detached?: boolean;
 }
 
 /**
@@ -60,6 +62,7 @@ export function spawnProcess(cmd: string[], opts: SpawnOpts = {}): SpawnedProces
     cwd: opts.cwd,
     env: opts.env ? { ...process.env, ...opts.env } : process.env,
     stdio: [stdinMode, "pipe", stderrMode],
+    detached: opts.detached,
   });
 
   const exited = new Promise<number>((resolve) => {
@@ -96,6 +99,10 @@ export function spawnProcess(cmd: string[], opts: SpawnOpts = {}): SpawnedProces
     exited,
     kill: (signal) => {
       try {
+        if (opts.detached && proc.pid) {
+          process.kill(-proc.pid, signal);
+          return true;
+        }
         return proc.kill(signal);
       } catch {
         return false;

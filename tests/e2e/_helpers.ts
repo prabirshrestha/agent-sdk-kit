@@ -6,8 +6,11 @@
 //     underlying CLI and/or SDK is actually present. Just having the binary
 //     in PATH isn't enough — auth state isn't probed and the env opt-in keeps
 //     CI honest.
-//   - `withRetry` retries transient 403/rate-limit/connection errors common
-//     to copilot-backed providers.
+//   - `runTurnWithRetry` / `consumeTurnWithRetry` retry transient
+//     403/rate-limit/connection errors common to copilot-backed providers and
+//     abort timed-out turns before retrying.
+//   - `retryScenario` retries a whole multi-turn scenario from a fresh session
+//     when a per-turn timeout leaves session state unreliable.
 //   - `assertLifecycleOrdering` enforces the §6.2 event ordering invariant
 //     used by every transport.
 //
@@ -115,96 +118,96 @@ export function logSkip(provider: string, reason: string): void {
 /* Retry                                                                */
 /* ------------------------------------------------------------------ */
 
-/**
- * Retry transient failures (403 / rate-limit / spawn errors / hangs).
- *
- * Per-attempt timeout (`perAttemptMs`) treats any attempt that doesn't settle
- * in time as a transient failure and retries — protects against upstream
- * stalls that would otherwise burn the entire test timeout. Default 60s.
- */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  retries = 5,
-  delayMs = 8_000,
-  perAttemptMs = 60_000,
-): Promise<T> {
+type RetryableTurn = { result: Promise<unknown>; abort: (r?: unknown) => void };
+
+function isRetryableE2eError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("Forbidden") ||
+    msg.includes("403") ||
+    msg.includes("rate limit") ||
+    msg.includes("connection") ||
+    msg.includes("timed out")
+  );
+}
+
+function timeoutAfter(label: string, attempt: number, perAttemptMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<never>((_, rej) => {
+    timer = setTimeout(
+      () => rej(new Error(`${label} attempt ${attempt + 1} timed out after ${perAttemptMs}ms`)),
+      perAttemptMs,
+    );
+  });
+  return { promise, clear: () => timer && clearTimeout(timer) };
+}
+
+function abandonTurn(turn: RetryableTurn): void {
+  turn.abort(new Error("retry: previous attempt abandoned"));
+  turn.result.catch(() => {});
+}
+
+async function retryTurn<T extends RetryableTurn, R>(
+  label: string,
+  buildTurn: () => T,
+  consume: (turn: T) => Promise<R>,
+  retries: number,
+  delayMs: number,
+  perAttemptMs: number,
+): Promise<R> {
   for (let i = 0; i < retries; i++) {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const turn = buildTurn();
+    const timeout = timeoutAfter(label, i, perAttemptMs);
     try {
-      const timeout = new Promise<never>((_, rej) => {
-        timer = setTimeout(
-          () => rej(new Error(`withRetry attempt ${i + 1} timed out after ${perAttemptMs}ms`)),
-          perAttemptMs,
-        );
-      });
-      return await Promise.race([fn(), timeout]);
+      return await Promise.race([consume(turn), timeout.promise]);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const retryable =
-        msg.includes("Forbidden") ||
-        msg.includes("403") ||
-        msg.includes("rate limit") ||
-        msg.includes("connection") ||
-        msg.includes("timed out");
-      if (!retryable || i === retries - 1) throw err;
+      abandonTurn(turn);
+      if (!isRetryableE2eError(err) || i === retries - 1) throw err;
       await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
     } finally {
-      if (timer) clearTimeout(timer);
+      timeout.clear();
+    }
+  }
+  throw new Error("unreachable");
+}
+
+export async function retryScenario<T>(
+  fn: () => Promise<T>,
+  retries = 3,
+  delayMs = 2_000,
+): Promise<T> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      if (!isRetryableE2eError(err) || i === retries - 1) throw err;
+      await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
     }
   }
   throw new Error("unreachable");
 }
 
 /**
- * Like `withRetry` but for an entire `agent.run({...})` turn: builds the turn,
- * awaits its `.result`, and on per-attempt timeout calls `.abort()` so the
+ * Retry an entire `agent.run({...})` turn: builds the turn, awaits its
+ * `.result`, and on per-attempt timeout calls `.abort()` so the
  * abandoned SSE stream is torn down before the next attempt. Use this for
  * resume / multi-turn tests where a single hang would otherwise leak a
  * dangling provider stream across retries.
  */
-export async function runTurnWithRetry<
-  T extends { result: Promise<unknown>; abort: (r?: unknown) => void },
->(
+export async function runTurnWithRetry<T extends RetryableTurn>(
   buildTurn: () => T,
-  retries = 5,
-  delayMs = 8_000,
-  perAttemptMs = 60_000,
+  retries = 2,
+  delayMs = 2_000,
+  perAttemptMs = 25_000,
 ): Promise<Awaited<T["result"]>> {
-  for (let i = 0; i < retries; i++) {
-    const turn = buildTurn();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const timeout = new Promise<never>((_, rej) => {
-        timer = setTimeout(
-          () =>
-            rej(new Error(`runTurnWithRetry attempt ${i + 1} timed out after ${perAttemptMs}ms`)),
-          perAttemptMs,
-        );
-      });
-      return (await Promise.race([turn.result, timeout])) as Awaited<T["result"]>;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const retryable =
-        msg.includes("Forbidden") ||
-        msg.includes("403") ||
-        msg.includes("rate limit") ||
-        msg.includes("connection") ||
-        msg.includes("timed out");
-      // Always abort the abandoned turn so its stream is closed and the
-      // server can release any per-session lock before we retry.
-      try {
-        turn.abort(new Error("retry: previous attempt abandoned"));
-      } catch {
-        // ignore
-      }
-      turn.result.catch(() => {});
-      if (!retryable || i === retries - 1) throw err;
-      await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-  throw new Error("unreachable");
+  return retryTurn(
+    "runTurnWithRetry",
+    buildTurn,
+    (turn) => turn.result as Promise<Awaited<T["result"]>>,
+    retries,
+    delayMs,
+    perAttemptMs,
+  );
 }
 
 /**
@@ -214,50 +217,16 @@ export async function runTurnWithRetry<
  * the next attempt. Returns whatever the consumer returns.
  */
 export async function consumeTurnWithRetry<
-  T extends { result: Promise<unknown>; abort: (r?: unknown) => void },
+  T extends RetryableTurn,
   R,
 >(
   buildTurn: () => T,
   consume: (turn: T) => Promise<R>,
-  retries = 5,
-  delayMs = 8_000,
-  perAttemptMs = 90_000,
+  retries = 2,
+  delayMs = 2_000,
+  perAttemptMs = 25_000,
 ): Promise<R> {
-  for (let i = 0; i < retries; i++) {
-    const turn = buildTurn();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const timeout = new Promise<never>((_, rej) => {
-        timer = setTimeout(
-          () =>
-            rej(
-              new Error(`consumeTurnWithRetry attempt ${i + 1} timed out after ${perAttemptMs}ms`),
-            ),
-          perAttemptMs,
-        );
-      });
-      return await Promise.race([consume(turn), timeout]);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const retryable =
-        msg.includes("Forbidden") ||
-        msg.includes("403") ||
-        msg.includes("rate limit") ||
-        msg.includes("connection") ||
-        msg.includes("timed out");
-      try {
-        turn.abort(new Error("retry: previous attempt abandoned"));
-      } catch {
-        // ignore
-      }
-      turn.result.catch(() => {});
-      if (!retryable || i === retries - 1) throw err;
-      await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-  throw new Error("unreachable");
+  return retryTurn("consumeTurnWithRetry", buildTurn, consume, retries, delayMs, perAttemptMs);
 }
 
 /* ------------------------------------------------------------------ */
