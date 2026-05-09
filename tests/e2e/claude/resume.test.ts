@@ -1,11 +1,7 @@
 // claude CLI: resume / multi-turn (2-turn + 3-turn).
 import { describe, test, expect } from "bun:test";
 import { createAgent, claude } from "../../../src/index.js";
-import {
-  e2eGate,
-  assertLifecycleOrdering,
-  collectFullStream,
-} from "../_helpers.js";
+import { e2eGate, assertLifecycleOrdering, collectFullStream } from "../_helpers.js";
 
 const enabled = await e2eGate("claude");
 const provider = () => claude({ cwd: "/tmp", model: "claude-haiku-4-5" });

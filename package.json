@@ -1,6 +1,6 @@
 {
   "name": "agent-sdk-kit",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Wrap multiple coding-agent CLIs (claude, copilot, opencode, pi) behind a uniform API with native session resume and fork.",
   "keywords": [
     "acp",

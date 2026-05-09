@@ -1,11 +1,7 @@
 // copilot SDK: resume / multi-turn (2-turn + 3-turn).
 import { describe, test, expect } from "bun:test";
 import { createAgent, copilot } from "../../../src/index.js";
-import {
-  e2eGate,
-  assertLifecycleOrdering,
-  collectFullStream,
-} from "../_helpers.js";
+import { e2eGate, assertLifecycleOrdering, collectFullStream } from "../_helpers.js";
 
 const enabled = await e2eGate("copilot-sdk");
 

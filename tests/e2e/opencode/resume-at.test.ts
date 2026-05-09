@@ -9,12 +9,7 @@
 // and made the previous version hang under shared rate limits).
 import { describe, test, expect } from "bun:test";
 import { createAgent, opencode } from "../../../src/index.js";
-import {
-  e2eGate,
-  retryScenario,
-  consumeTurnWithRetry,
-  runTurnWithRetry,
-} from "../_helpers.js";
+import { e2eGate, retryScenario, consumeTurnWithRetry, runTurnWithRetry } from "../_helpers.js";
 
 const enabled = await e2eGate("opencode-sdk");
 const ocConfig = { cwd: "/tmp", model: "github-copilot/gpt-5-mini" } as const;

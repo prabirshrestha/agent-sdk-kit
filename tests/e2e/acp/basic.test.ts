@@ -26,11 +26,11 @@ describe.skipIf(!enabled)("acp / basic", () => {
     const text = await consumeTurnWithRetry(
       () => agent.run({ prompt: "reply with exactly: pong" }),
       async (turn) => {
-      turn.result.catch(() => {});
-      const chunks: string[] = [];
-      for await (const c of turn.textStream) chunks.push(c);
-      await turn.result;
-      return chunks.join("");
+        turn.result.catch(() => {});
+        const chunks: string[] = [];
+        for await (const c of turn.textStream) chunks.push(c);
+        await turn.result;
+        return chunks.join("");
       },
     );
     expect(text.toLowerCase()).toContain("pong");

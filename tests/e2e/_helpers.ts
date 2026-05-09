@@ -201,10 +201,7 @@ export async function runTurnWithRetry<T extends RetryableTurn>(
  * aborts the turn on timeout so the abandoned SSE stream is torn down before
  * the next attempt. Returns whatever the consumer returns.
  */
-export async function consumeTurnWithRetry<
-  T extends RetryableTurn,
-  R,
->(
+export async function consumeTurnWithRetry<T extends RetryableTurn, R>(
   buildTurn: () => T,
   consume: (turn: T) => Promise<R>,
   retries = 2,
