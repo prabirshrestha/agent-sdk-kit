@@ -37,7 +37,14 @@ import {
 import { applySandbox } from "../sandbox/index.js";
 
 /**
- * Create a Pi provider (CLI transport).
+ * Create a Pi provider.
+ *
+ * Two transports are supported:
+ * - `"cli"` (default): spawns the `pi` binary and parses JSONL output. No JS
+ *   peer dependency required.
+ * - `"sdk"`: uses `@mariozechner/pi-coding-agent` programmatically (optional
+ *   peer dep). Unlocks customTools, programmatic custom providers, in-process
+ *   execution. Imported lazily only when the SDK transport is selected.
  */
 export function pi(config?: PiConfig): ProviderImpl {
   const cwd = config?.cwd ?? process.cwd();
@@ -59,6 +66,12 @@ export function pi(config?: PiConfig): ProviderImpl {
     transport,
 
     stream(op: StreamOp, opts: CallOptions): AsyncIterable<AgentEvent> {
+      if (transport === "sdk") {
+        // Lazy-import to keep the optional peer dep truly optional. The
+        // transport module itself only imports `@mariozechner/pi-coding-agent`
+        // dynamically, so CLI-only users never load it.
+        return _streamPiViaSdk(op, opts, { cwd, config });
+      }
       return _streamPi(op, opts, {
         cwd,
         binPath,
@@ -79,9 +92,21 @@ export function pi(config?: PiConfig): ProviderImpl {
     },
 
     async dispose() {
-      // No persistent resources for CLI transport
+      // No persistent resources for either transport
     },
   };
+}
+
+async function* _streamPiViaSdk(
+  op: StreamOp,
+  opts: CallOptions,
+  ctx: { cwd: string; config?: PiConfig },
+): AsyncIterable<AgentEvent> {
+  // Dynamic import — keeps `@mariozechner/pi-coding-agent` truly optional.
+  // Importing the wrapper module is itself dynamic so consumers without the
+  // peer dep never trigger module resolution for it.
+  const mod = await import("../transports/sdk-pi.js");
+  yield* mod._streamPiSdk(op, opts, ctx);
 }
 
 export function buildCommand(

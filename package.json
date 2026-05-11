@@ -64,6 +64,8 @@
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
     "@github/copilot-sdk": "^1.0.0-beta.1",
+    "@mariozechner/pi-ai": "^0.73.1",
+    "@mariozechner/pi-coding-agent": "^0.73.1",
     "@opencode-ai/sdk": "^1.14.35",
     "@types/bun": "^1.3.13",
     "@typescript/native-preview": "^7.0.0-dev.20260504.1",
@@ -75,11 +77,19 @@
   },
   "peerDependencies": {
     "@github/copilot-sdk": "^1.0.0-beta.1",
+    "@mariozechner/pi-ai": "^0.73.1",
+    "@mariozechner/pi-coding-agent": "^0.73.1",
     "@opencode-ai/sdk": "^1.4.12",
     "@zed-industries/agent-client-protocol": "^0.4.5"
   },
   "peerDependenciesMeta": {
     "@github/copilot-sdk": {
+      "optional": true
+    },
+    "@mariozechner/pi-ai": {
+      "optional": true
+    },
+    "@mariozechner/pi-coding-agent": {
       "optional": true
     },
     "@opencode-ai/sdk": {

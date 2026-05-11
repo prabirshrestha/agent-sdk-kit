@@ -326,13 +326,61 @@ export interface OpencodeConfig {
   sandbox?: SandboxConfig;
 }
 
+/**
+ * Per-call options to register custom providers when running the pi SDK
+ * transport. Each entry calls `modelRegistry.registerProvider(name, config)`
+ * before the first prompt.
+ *
+ * The `config` value is passed through to pi-ai's `registerProvider` API; it
+ * is typed as `unknown` here so callers without `@mariozechner/pi-coding-agent`
+ * installed don't pay a type-resolution cost. See pi's
+ * `ProviderConfigInput` (in `@mariozechner/pi-coding-agent/dist/core/model-registry.d.ts`)
+ * for the accepted fields (`baseUrl`, `apiKey`, `api`, `headers`, `oauth`,
+ * `models`, `streamSimple`, etc).
+ */
+export interface PiCustomProvider {
+  name: string;
+  config: unknown;
+}
+
 export interface PiConfig {
   cwd?: string;
   model?: string;
   provider?: string;
   binPath?: string;
-  transport?: "cli" | "rpc";
+  /**
+   * Transport selection.
+   * - `"cli"` (default): spawn the `pi` binary and parse JSONL output. No JS
+   *   peer dependency required.
+   * - `"sdk"`: use `@mariozechner/pi-coding-agent` programmatically (peer
+   *   dep, optional). Unlocks custom tools, programmatic custom providers,
+   *   and in-process execution.
+   * - `"rpc"`: not yet supported (falls back to cli with a warning).
+   */
+  transport?: "cli" | "sdk" | "rpc";
   extensions?: string[];
+  /**
+   * SDK transport only. Static allowlist of pi built-in tool names to expose
+   * (e.g. `["read", "bash"]`). When omitted, pi's defaults apply
+   * (`["read", "bash", "edit", "write"]`).
+   */
+  sdkTools?: string[];
+  /**
+   * SDK transport only. Disable some/all built-in tools.
+   * - `"all"`: no built-in tools enabled (only `customTools` from CallOptions)
+   * - `"builtin"`: disable read/bash/edit/write but keep extension/custom tools
+   */
+  sdkNoTools?: "all" | "builtin";
+  /**
+   * SDK transport only. Custom providers to register on the session's
+   * ModelRegistry before the first prompt. See `PiCustomProvider` for shape.
+   */
+  customProviders?: PiCustomProvider[];
+  /**
+   * SDK transport only. Pi `ThinkingLevel` (`"off"|"minimal"|"low"|"medium"|"high"|"xhigh"`).
+   * Pi clamps to model capabilities; unsupported values are downgraded.
+   */
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   sandbox?: SandboxConfig;
 }
 

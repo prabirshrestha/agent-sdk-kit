@@ -140,7 +140,7 @@ below. Unsupported combinations throw `AgentError("not_supported", …)`.
 | **claude**   | `cli`, `copilot-api` | `cli`   |
 | **copilot**  | `sdk`                | `sdk`   |
 | **opencode** | `sdk`                | `sdk`   |
-| **pi**       | `cli`, `rpc`         | `cli`   |
+| **pi**       | `cli`, `sdk`, `rpc`  | `cli`   |
 | **acp()**    | `acp`                | `acp`   |
 
 `copilot()` and `opencode()` use their official SDKs (which themselves spawn helper subprocesses under the hood — see the Sandbox section).
@@ -160,25 +160,25 @@ const agent = createAgent({
 What each provider + transport supports. Unsupported options throw
 `AgentError("not_supported", …)` rather than silently no-op.
 
-|                       | claude (CLI) | copilot (SDK) | opencode (SDK) | pi (CLI) | acp() |
-| --------------------- | :----------: | :-----------: | :------------: | :------: | :---: |
-| **Lifecycle**         |              |               |                |          |       |
-| `resume`              |      ✓       |       ✓       |       ✓        |    ✓     |   ✓   |
-| `resumeSessionAt`     |      ✗       |       ✓       |       ✓        |    ✗     |   ✗   |
-| `forkSession`         |      ✓       |       ✓       |       ✓        |    ✓     |   ✗   |
-| `sessionId` (pin)     |      ✓       |       ✓       |       ✗        |    ✗     |   ✗   |
-| **Per-call options**  |              |               |                |          |       |
-| `systemPrompt`        |      ~       |       ✓       |       ✓        |    ✓     |   ~   |
-| `appendSystemPrompt`  |      ✓       |       ✓       |       ~        |    ✓     |   ~   |
-| `model` (override)    |      ✓       |       ✓       |       ✓        |    ✓     |   ~   |
-| `attachments`         |      ✓       |       ✓       |       ✓        |    ✓     |   ✓   |
-| `tools` (custom)      |      ~       |       ✓       |       ~        |    ~     |   ~   |
-| `mcpServers`          |      ✓       |       ✓       |       ✓        |    ~     |   ✓   |
-| `abortSignal`         |      ✓       |       ✓       |       ✓        |    ✓     |   ✓   |
-| `onPermissionRequest` |      ✗       |       ✓       |       ✓        |    ✗     |   ~   |
-| **Provider features** |              |               |                |          |       |
-| `deleteSession`       |      ✓       |       ✓       |       ✓        |    ✗     |   ✗   |
-| `sandbox` (nono)      |      ✓       |       ✓       |       ✓        |    ✓     |   ✓   |
+|                       | claude (CLI) | copilot (SDK) | opencode (SDK) | pi (CLI) | pi (SDK) | acp() |
+| --------------------- | :----------: | :-----------: | :------------: | :------: | :------: | :---: |
+| **Lifecycle**         |              |               |                |          |          |       |
+| `resume`              |      ✓       |       ✓       |       ✓        |    ✓     |    ✓     |   ✓   |
+| `resumeSessionAt`     |      ✗       |       ✓       |       ✓        |    ✗     |    ✗     |   ✗   |
+| `forkSession`         |      ✓       |       ✓       |       ✓        |    ✓     |    ✓     |   ✗   |
+| `sessionId` (pin)     |      ✓       |       ✓       |       ✗        |    ✗     |    ✓     |   ✗   |
+| **Per-call options**  |              |               |                |          |          |       |
+| `systemPrompt`        |      ~       |       ✓       |       ✓        |    ✓     |    ✓     |   ~   |
+| `appendSystemPrompt`  |      ✓       |       ✓       |       ~        |    ✓     |    ✓     |   ~   |
+| `model` (override)    |      ✓       |       ✓       |       ✓        |    ✓     |    ✓     |   ~   |
+| `attachments`         |      ✓       |       ✓       |       ✓        |    ✓     |    ✓     |   ✓   |
+| `tools` (custom)      |      ~       |       ✓       |       ~        |    ~     |    ✓     |   ~   |
+| `mcpServers`          |      ✓       |       ✓       |       ✓        |    ~     |    ~     |   ✓   |
+| `abortSignal`         |      ✓       |       ✓       |       ✓        |    ✓     |    ✓     |   ✓   |
+| `onPermissionRequest` |      ✗       |       ✓       |       ✓        |    ✗     |    ~     |   ~   |
+| **Provider features** |              |               |                |          |          |       |
+| `deleteSession`       |      ✓       |       ✓       |       ✓        |    ✗     |    ✗     |   ✗   |
+| `sandbox` (nono)      |      ✓       |       ✓       |       ✓        |    ✓     |    ✗     |   ✓   |
 
 Legend: **✓** supported · **✗** throws `not_supported` (or no-op for `deleteSession`) · **~** partial — see Notes below.
 
@@ -201,6 +201,9 @@ Legend: **✓** supported · **✗** throws `not_supported` (or no-op for `delet
 | claude / opencode / pi × `tools` | [2]  |
 | acp × `tools`                    | [9]  |
 | pi × `mcpServers`                | [8]  |
+| pi (SDK) × `mcpServers`          | [13] |
+| pi (SDK) × `onPermissionRequest` | [14] |
+| pi (SDK) × `sandbox`             | [15] |
 | acp × `onPermissionRequest`      | [3]  |
 | copilot × `sandbox`              | [4]  |
 | acp × `sandbox`                  | [5]  |
@@ -228,6 +231,12 @@ Legend: **✓** supported · **✗** throws `not_supported` (or no-op for `delet
 [11] In-place rewind (same session id preserved): copilot calls the experimental session-scoped `session.rpc.history.truncate({ eventId })` RPC after `resumeSession`; opencode calls `POST /session/{id}/revert` with `body.messageID` before the prompt. Combine with `forkSession: true` for fork-at-message instead: copilot routes to `sessions.fork({ toEventId })` and opencode to `POST /session/{id}/fork` with `body.messageID`. The new session id is surfaced as a `session_forked` event with the source id.
 
 [12] ACP's `session/set_model` RPC is marked **UNSTABLE** in the schema ("not part of the spec yet, and may be removed or changed at any point") and is only honored when the agent advertises support via `NewSessionResponse.models`. The kit calls it before the prompt when `opts.model` (or `AcpConfig.model`) is set; if the agent doesn't advertise model selection, the call throws `not_supported`. Format is whatever model id the agent advertises in its `availableModels`.
+
+[13] pi (SDK) does not currently map `opts.mcpServers` (CallOptions.mcpServers shape doesn't match pi's extension model). Ignored with a one-time `console.warn`. Use `customProviders` and `tools` (custom) instead — both are first-class on the SDK transport.
+
+[14] pi (SDK) only routes per-call permission decisions through user-supplied **custom** tools (gated by our wrapper around `execute()`). Built-in pi tools (read/bash/edit/write) cannot be per-call gated because pi's `AgentSession` internally claims the `beforeToolCall` hook; restrict them at construction time instead via `PiConfig.sdkTools` (allowlist) or `PiConfig.sdkNoTools: "all" | "builtin"`.
+
+[15] pi (SDK) runs in-process — there is no subprocess to wrap with `nono`. Use the CLI transport if you need sandboxed execution.
 
 ## Per-call model override
 
