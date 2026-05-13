@@ -13,7 +13,7 @@ describe("tool() async generator support", () => {
       inputSchema: { type: "object" },
       execute: async (input) => ({ echoed: input }),
     });
-    const out = await t.execute({ hello: "world" }, ctx());
+    const out = await t.execute!({ hello: "world" }, ctx());
     expect(out).toEqual({ echoed: { hello: "world" } });
   });
 
@@ -23,7 +23,7 @@ describe("tool() async generator support", () => {
       inputSchema: { type: "object" },
       execute: () => ({ ok: true }),
     });
-    const out = await t.execute({}, ctx());
+    const out = await t.execute!({}, ctx());
     expect(out).toEqual({ ok: true });
   });
 
@@ -37,7 +37,7 @@ describe("tool() async generator support", () => {
         yield { state: "done", result: 42 };
       },
     });
-    const out = await t.execute({}, ctx());
+    const out = await t.execute!({}, ctx());
     expect(out).toEqual({ state: "done", result: 42 });
   });
 
@@ -52,7 +52,7 @@ describe("tool() async generator support", () => {
         yield { step: 3, final: true };
       },
     });
-    const out = await t.execute(
+    const out = await t.execute!(
       {},
       {
         sessionId: "s-1",
@@ -73,7 +73,7 @@ describe("tool() async generator support", () => {
         yield { result: "visible" };
       },
     });
-    const out = await t.execute({}, ctx());
+    const out = await t.execute!({}, ctx());
     expect(out).toEqual({ result: "visible" });
   });
 
@@ -86,7 +86,7 @@ describe("tool() async generator support", () => {
         throw new Error("boom");
       },
     });
-    const out = await t.execute({}, ctx());
+    const out = await t.execute!({}, ctx());
     expect(out).toEqual({ isError: true, message: "boom" });
   });
 
@@ -98,7 +98,7 @@ describe("tool() async generator support", () => {
         // yields nothing
       },
     });
-    const out = await t.execute({}, ctx());
+    const out = await t.execute!({}, ctx());
     expect(out).toBeUndefined();
   });
 
@@ -122,7 +122,7 @@ describe("tool() async generator support", () => {
     });
 
     const callId = "tc-42";
-    const out = await t.execute(
+    const out = await t.execute!(
       {},
       {
         sessionId: "s-1",

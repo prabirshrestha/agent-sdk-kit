@@ -43,7 +43,7 @@ describe("tool() approval gate", () => {
         return { ok: true };
       },
     });
-    const out = await t.execute({}, baseCtx({ emit: (v) => emitted.push(v) }));
+    const out = await t.execute!({}, baseCtx({ emit: (v) => emitted.push(v) }));
     expect(out).toEqual({ ok: true });
     expect(executed).toBe(true);
     expect(emitted.find((e) => (e as AgentEvent).type === "permission_request")).toBeUndefined();
@@ -61,7 +61,7 @@ describe("tool() approval gate", () => {
         return { value: 42 };
       },
     });
-    const out = await t.execute({ arg: "x" }, baseCtx({ emit }));
+    const out = await t.execute!({ arg: "x" }, baseCtx({ emit }));
     expect(executed).toBe(true);
     expect(out).toEqual({ value: 42 });
     const req = emitted.find(
@@ -86,7 +86,7 @@ describe("tool() approval gate", () => {
         return { value: "should-not-run" };
       },
     });
-    const out = await t.execute({}, baseCtx({ emit }));
+    const out = await t.execute!({}, baseCtx({ emit }));
     expect(executed).toBe(false);
     expect(out).toEqual({ isError: true, message: "denied by user approval gate" });
     expect(emitted.some((e) => (e as AgentEvent).type === "permission_request")).toBe(true);
@@ -105,7 +105,7 @@ describe("tool() approval gate", () => {
     {
       const { emit, emitted } = makeEmitWithResponder("allow");
       const t = tool("cond", def);
-      const out = await t.execute({ sensitive: true }, baseCtx({ emit }));
+      const out = await t.execute!({ sensitive: true }, baseCtx({ emit }));
       expect(out).toEqual({ received: { sensitive: true } });
       expect(emitted.some((e) => (e as AgentEvent).type === "permission_request")).toBe(true);
     }
@@ -114,7 +114,7 @@ describe("tool() approval gate", () => {
     {
       const emitted: unknown[] = [];
       const t = tool("cond", def);
-      const out = await t.execute({ sensitive: false }, baseCtx({ emit: (v) => emitted.push(v) }));
+      const out = await t.execute!({ sensitive: false }, baseCtx({ emit: (v) => emitted.push(v) }));
       expect(out).toEqual({ received: { sensitive: false } });
       expect(emitted.find((e) => (e as AgentEvent).type === "permission_request")).toBeUndefined();
     }
@@ -132,7 +132,7 @@ describe("tool() approval gate", () => {
       },
     });
     // No emit on ctx — gate must silently skip.
-    const out = await t.execute({}, baseCtx());
+    const out = await t.execute!({}, baseCtx());
     expect(executed).toBe(true);
     expect(out).toEqual({ ok: true });
   });
@@ -150,7 +150,7 @@ describe("tool() approval gate", () => {
     {
       const { emit, emitted } = makeEmitWithResponder("allow");
       const t = tool("async-cond", def);
-      const out = await t.execute({ foo: "bar" }, baseCtx({ emit }));
+      const out = await t.execute!({ foo: "bar" }, baseCtx({ emit }));
       expect(out).toEqual({ received: { foo: "bar" } });
       const req = emitted.find(
         (e) => (e as AgentEvent).type === "permission_request",
@@ -164,7 +164,7 @@ describe("tool() approval gate", () => {
     {
       const emitted: unknown[] = [];
       const t = tool("async-cond", def);
-      const out = await t.execute({ foo: "baz" }, baseCtx({ emit: (v) => emitted.push(v) }));
+      const out = await t.execute!({ foo: "baz" }, baseCtx({ emit: (v) => emitted.push(v) }));
       expect(out).toEqual({ received: { foo: "baz" } });
       expect(emitted.find((e) => (e as AgentEvent).type === "permission_request")).toBeUndefined();
     }
@@ -182,7 +182,7 @@ describe("tool() approval gate", () => {
           return { should: "not-run" };
         },
       });
-      const out = await t.execute({ foo: "bar" }, baseCtx({ emit }));
+      const out = await t.execute!({ foo: "bar" }, baseCtx({ emit }));
       expect(executed).toBe(false);
       expect(out).toEqual({ isError: true, message: "denied by user approval gate" });
       expect(emitted.some((e) => (e as AgentEvent).type === "permission_request")).toBe(true);
@@ -208,7 +208,7 @@ describe("tool() approval gate", () => {
         return { ok: true };
       },
     });
-    const out = await t.execute({}, baseCtx({ emit: (v) => emitted.push(v) }));
+    const out = await t.execute!({}, baseCtx({ emit: (v) => emitted.push(v) }));
     // Actual behavior: tool() wrapper swallows the throw into an isError result.
     expect(out).toEqual({ isError: true, message: "predicate blew up" });
     expect(executed).toBe(false);

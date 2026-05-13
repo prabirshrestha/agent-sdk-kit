@@ -253,9 +253,16 @@ export interface ToolContext {
 }
 
 // Agent tool — the low-level runtime shape consumed by provider transports.
-// `execute` always resolves to a single value. User-facing tool definitions
-// (see `ToolDefinition` in src/tools.ts) additionally accept async generators;
-// the `tool()` helper normalizes those to this shape.
+// `execute` resolves to a single value when present. User-facing tool
+// definitions (see `ToolDefinition` in src/tools.ts) additionally accept
+// async generators; the `tool()` helper normalizes those to this shape.
+//
+// Host-handled tools (no `execute`): some callers register tools by name +
+// schema only, intending to observe `tool_call` events on the agent stream
+// and act post-turn instead of synchronously. For those tools transports
+// MUST synthesize a no-op ack handler so the SDK's tool-result loop
+// completes and the agent's turn proceeds. See
+// `synthesizeHostHandledResult()` in src/tools.ts.
 export interface AgentTool {
   name: string;
   description: string;
@@ -268,7 +275,11 @@ export interface AgentTool {
    * transports that populate ctx.emit (currently: copilot SDK).
    */
   needsApproval?: boolean | ((input: unknown, ctx: ToolContext) => boolean | Promise<boolean>);
-  execute: (input: unknown, ctx: ToolContext) => Promise<unknown>;
+  /**
+   * Tool implementation. Omit for host-handled tools — see the interface
+   * docstring above. When present, must return a value or Promise.
+   */
+  execute?: (input: unknown, ctx: ToolContext) => Promise<unknown>;
 }
 
 // Agent info for detectAgents()

@@ -3,6 +3,30 @@ import type { AgentTool, ToolContext } from "./types.js";
 import { AgentError } from "./errors.js";
 import { permissionRequestEvent } from "./events.js";
 
+/**
+ * Build the placeholder result transports return for "host-handled"
+ * tools (`AgentTool` with no `execute`). The host observes the
+ * `tool_call` event on the stream and acts post-turn; the SDK still
+ * needs a result to feed back to the agent so its turn can continue.
+ *
+ * Shape: `{ ok: true, input }` — a small, neutral ack. Hosts that
+ * want richer feedback should provide a real `execute` instead.
+ */
+export function synthesizeHostHandledResult(input: unknown): {
+  ok: true;
+  input: unknown;
+} {
+  return { ok: true, input };
+}
+
+/**
+ * True when an `AgentTool` ships without an `execute` — the host is
+ * expected to handle the call out-of-band via the tool_call event.
+ */
+export function isHostHandledTool(tool: AgentTool): boolean {
+  return typeof tool.execute !== "function";
+}
+
 export interface ToolDefinition<Input = unknown, Output = unknown> {
   description: string;
   inputSchema: Record<string, unknown> | { _zod: any /* zod schema */ };

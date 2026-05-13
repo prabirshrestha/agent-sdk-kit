@@ -11,6 +11,7 @@ import type {
 import { AgentError, notSupported } from "../errors.js";
 import { which } from "../runtime.js";
 import { applySandbox } from "../sandbox/index.js";
+import { synthesizeHostHandledResult } from "../tools.js";
 import {
   isPrivateOrLoopbackHost,
   IMAGE_URL_FETCH_TIMEOUT_MS,
@@ -189,6 +190,14 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
       description: tool.description,
       parameters: tool.inputSchema as Record<string, unknown>,
       handler: async (args: unknown, invocation: { sessionId: string; toolCallId: string }) => {
+        // Host-handled tools (no `execute`): the host observes the
+        // tool_call event on the stream and acts post-turn. The SDK
+        // still needs a result to feed back to the agent so the turn
+        // can continue, so we synthesize a neutral ack. See
+        // `synthesizeHostHandledResult` + the AgentTool docstring.
+        if (typeof tool.execute !== "function") {
+          return synthesizeHostHandledResult(args);
+        }
         try {
           const result = await tool.execute(args, {
             sessionId: invocation.sessionId,

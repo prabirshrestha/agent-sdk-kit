@@ -42,6 +42,7 @@ import type {
   PermissionRequest,
 } from "../types.js";
 import { AgentError, notSupported } from "../errors.js";
+import { synthesizeHostHandledResult } from "../tools.js";
 import {
   sessionEvent,
   sessionForkedEvent,
@@ -240,20 +241,27 @@ function buildPiCustomTools(
         }
 
         try {
-          const result = await tool.execute(params, {
-            sessionId: "",
-            abortSignal: signal ?? ctx.outerAbortSignal ?? new AbortController().signal,
-            emit: (update: unknown) => {
-              ctx.emitToolProgress(toolCallId, tool.name, update);
-              if (onUpdate) {
-                const text = typeof update === "string" ? update : safeStringify(update);
-                onUpdate({
-                  content: [{ type: "text", text }],
-                  details: update,
-                });
-              }
-            },
-          });
+          // Host-handled tool (no `execute`): the host observes the
+          // tool_call event and acts post-turn. Synthesize a neutral
+          // ack so pi's turn loop can continue. See the AgentTool
+          // interface docstring + `synthesizeHostHandledResult`.
+          const result =
+            typeof tool.execute === "function"
+              ? await tool.execute(params, {
+                  sessionId: "",
+                  abortSignal: signal ?? ctx.outerAbortSignal ?? new AbortController().signal,
+                  emit: (update: unknown) => {
+                    ctx.emitToolProgress(toolCallId, tool.name, update);
+                    if (onUpdate) {
+                      const text = typeof update === "string" ? update : safeStringify(update);
+                      onUpdate({
+                        content: [{ type: "text", text }],
+                        details: update,
+                      });
+                    }
+                  },
+                })
+              : synthesizeHostHandledResult(params);
           const text = typeof result === "string" ? result : safeStringify(result);
           return {
             content: [{ type: "text", text }],
