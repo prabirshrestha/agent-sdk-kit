@@ -53,6 +53,36 @@ import type {
 //                                    systemMessage per session, so combining
 //                                    is the only way to honor both inputs).
 // See @github/copilot-sdk/dist/types.d.ts SystemMessageConfig.
+// Translate the kit's documented PermissionDecision shape
+// (`{ decision: "allow" | "deny" }` per src/types.ts) into the
+// Copilot SDK's native PermissionRequestResult union
+// (`{ kind: "approve-once" | "reject" | ... }`). When a caller already
+// returns the SDK-native shape, pass it through unchanged so existing
+// integrations keep working.
+export function translatePermissionDecision(raw: unknown): PermissionRequestResult {
+  if (!raw || typeof raw !== "object") {
+    // Defensive: anything weird → reject so the agent doesn't proceed
+    // on garbage. Logs go to the run's audit trail via the SDK.
+    return { kind: "reject" } as PermissionRequestResult;
+  }
+  const r = raw as Record<string, unknown>;
+  if ("decision" in r) {
+    if (r.decision === "allow") {
+      return { kind: "approve-once" } as PermissionRequestResult;
+    }
+    if (r.decision === "deny") {
+      const reason = typeof r.reason === "string" ? r.reason : undefined;
+      return {
+        kind: "reject",
+        ...(reason ? { feedback: reason } : {}),
+      } as PermissionRequestResult;
+    }
+  }
+  // Pass-through: caller already returned an SDK-native shape (e.g.
+  // `{ kind: "approve-once" }`). Trust it.
+  return raw as PermissionRequestResult;
+}
+
 function buildCopilotSystemMessage(
   systemPrompt: string | undefined,
   appendSystemPrompt: string | undefined,
@@ -223,6 +253,16 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
     // callback. This ensures iterator-based consumers observe the request
     // even when a user callback is provided.
     //
+    // The kit's public `PermissionDecision` shape is
+    // `{ decision: "allow" | "deny" }` (src/types.ts), but the Copilot
+    // SDK's `PermissionHandler` expects its native
+    // `{ kind: "approve-once" | "reject" | ... }`. Translate one to the
+    // other here so callers can return either shape: the documented
+    // PermissionDecision *or* the raw SDK shape (back-compat). Without
+    // this translation, returning `{ decision: "allow" }` lands in the
+    // SDK's `Tl(t, "unexpected user permission response")` and crashes
+    // the run mid-stream.
+    //
     // TODO(persist): PermissionDecision.persist (src/types.ts) is currently
     // dropped on this path. The @github/copilot-sdk PermissionDecision type
     // (tmp/copilot-sdk/nodejs/src/generated/rpc.ts:79 — only `kind:
@@ -230,7 +270,12 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
     // field, so there is nowhere to plumb `persist` at this time. When the
     // SDK adds an "approved-always"-style kind or a separate scope field,
     // wire it here and update the docstring on PermissionDecision.persist.
-    const userPermissionHandler = opts.onPermissionRequest as PermissionHandler | undefined;
+    const userPermissionHandler = opts.onPermissionRequest as
+      | ((
+          request: SdkPermissionRequest,
+          invocation: { sessionId: string },
+        ) => Promise<unknown> | unknown)
+      | undefined;
     const permissionHandler: PermissionHandler = async (
       request: SdkPermissionRequest,
       invocation: { sessionId: string },
@@ -244,8 +289,11 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
       });
       notifyQueue();
 
-      const handler = userPermissionHandler ?? approveAll;
-      return await handler(request, invocation);
+      if (!userPermissionHandler) {
+        return approveAll(request, invocation);
+      }
+      const raw = await userPermissionHandler(request, invocation);
+      return translatePermissionDecision(raw);
     };
 
     try {

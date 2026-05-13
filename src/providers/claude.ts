@@ -428,6 +428,54 @@ async function* _streamClaude(
         continue;
       }
 
+      // --- user message ---
+      // Claude's stream-json reports tool results back to the model as a
+      // synthetic `user` message whose content is a list of `tool_result`
+      // parts (each referencing the prior `tool_use` by id). Without this
+      // branch those results fall through to `rawEvent` and downstream
+      // consumers never see the matching `tool_result` events.
+      if (type === "user") {
+        const message = event.message as Record<string, unknown> | undefined;
+        if (!message) {
+          yield rawEvent("claude", event);
+          continue;
+        }
+
+        const parentToolUseId = message.parent_tool_use_id as string | undefined;
+        const content = message.content as Array<Record<string, unknown>> | undefined;
+        if (!Array.isArray(content)) {
+          yield rawEvent("claude", event);
+          continue;
+        }
+
+        for (const part of content) {
+          const partType = part.type as string;
+          if (partType === "tool_result") {
+            const ev: AgentEvent = {
+              type: "tool_result",
+              callId: (part.tool_use_id as string) ?? "",
+              output: part.content ?? "",
+              isError: (part.is_error as boolean) ?? false,
+              status: (part.is_error ? "failed" : "completed") as "completed" | "failed",
+            };
+            yield parentToolUseId ? withMeta(ev, { subagentId: parentToolUseId }) : ev;
+          } else if (partType === "text") {
+            // Rare — a user-authored text injected by the CLI (e.g. a
+            // permission denial reason). Surface as a delta so audit
+            // logs capture it.
+            const text = part.text as string;
+            if (text) {
+              const ev = textDeltaEvent(text);
+              yield parentToolUseId ? withMeta(ev, { subagentId: parentToolUseId }) : ev;
+            }
+          } else {
+            const ev = rawEvent("claude", event);
+            yield parentToolUseId ? withMeta(ev, { subagentId: parentToolUseId }) : ev;
+          }
+        }
+        continue;
+      }
+
       // --- assistant message ---
       if (type === "assistant") {
         const message = event.message as Record<string, unknown> | undefined;
