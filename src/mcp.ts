@@ -157,9 +157,13 @@ export async function compileMcp(
           continue;
         }
         mcp[server.name] = {
-          command: server.transport.command,
-          args: server.transport.args || [],
-          env: server.transport.env || {},
+          // Per opencode.json schema, mcp.<name>.type distinguishes local
+          // ("stdio") from remote MCP. Defensively setting it avoids future
+          // changes to opencode's default interpretation.
+          type: "local",
+          command: [server.transport.command, ...(server.transport.args || [])],
+          environment: server.transport.env || {},
+          enabled: true,
         };
       }
       const configPath = path.join(

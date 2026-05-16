@@ -589,6 +589,7 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
         let lastAssistantMessage: string | undefined;
         let turnEnded = false;
         let idx = 0;
+        const normalizeState = createNormalizeState();
 
         while (true) {
           // Wait for events if queue is empty
@@ -618,7 +619,7 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
           const sdkEvent = item.event;
           yield rawEvent("copilot", sdkEvent);
 
-          const normalized = normalizeEvent(sdkEvent);
+          const normalized = normalizeEvent(sdkEvent, normalizeState);
           for (const agentEvent of normalized) {
             if (agentEvent.type === "assistant_message") {
               lastAssistantMessage = agentEvent.text;
@@ -760,7 +761,21 @@ export function createCopilotSdkTransport(config?: CreateTransportOptions): Prov
   };
 }
 
-function normalizeEvent(ev: SessionEvent): AgentEvent[] {
+/**
+ * Tracks per-message streaming state across a session so that
+ * `normalizeEvent` does not double-emit synthesized text deltas for messages
+ * that have already been streamed via `assistant.message_delta`.
+ */
+export interface NormalizeState {
+  /** Message ids that have already received at least one `assistant.message_delta`. */
+  streamedMessages: Set<string>;
+}
+
+export function createNormalizeState(): NormalizeState {
+  return { streamedMessages: new Set<string>() };
+}
+
+export function normalizeEvent(ev: SessionEvent, state?: NormalizeState): AgentEvent[] {
   const events: AgentEvent[] = [];
   const meta: Record<string, unknown> = {};
 
@@ -824,6 +839,9 @@ function normalizeEvent(ev: SessionEvent): AgentEvent[] {
       const deltaData = ev.data as { deltaContent?: string; messageId?: string };
       const delta = deltaData.deltaContent ?? "";
       const messageId = deltaData.messageId;
+      if (messageId && state) {
+        state.streamedMessages.add(messageId);
+      }
       const event = textDeltaEvent(delta, messageId);
       events.push(hasMeta ? withMeta(event, meta) : event);
       break;
@@ -834,9 +852,11 @@ function normalizeEvent(ev: SessionEvent): AgentEvent[] {
       const text = msgData.content ?? "";
       const messageId = msgData.messageId;
 
-      // Since SDK doesn't always stream deltas, synthesize them from the final message
-      // This allows textStream to work properly
-      if (text) {
+      // Synthesize chunked deltas only when the SDK did NOT already stream
+      // `assistant.message_delta` events for this messageId. Without this
+      // guard, callers see ~2x the assistant text (streamed + synthesized).
+      const alreadyStreamed = messageId ? state?.streamedMessages.has(messageId) ?? false : false;
+      if (text && !alreadyStreamed) {
         const chunkSize = 50; // Reasonable chunk size for streaming simulation
         for (let i = 0; i < text.length; i += chunkSize) {
           const delta = text.slice(i, Math.min(i + chunkSize, text.length));

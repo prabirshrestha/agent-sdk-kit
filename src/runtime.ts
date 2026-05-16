@@ -12,6 +12,7 @@ import { Readable, Writable } from "node:stream";
 import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as os from "node:os";
 
 /**
  * Result of `spawnProcess()`. Mirrors the subset of Bun.Subprocess that the
@@ -29,6 +30,12 @@ export interface SpawnedProcess {
   stderr: ReadableStream<Uint8Array>;
   /** Resolves with the process exit code when the child exits. */
   exited: Promise<number>;
+  /**
+   * Resolves with the signal name if the child was terminated by a signal,
+   * otherwise `null`. Useful for distinguishing intentional aborts from
+   * genuine non-zero exits.
+   */
+  exitedSignal: Promise<NodeJS.Signals | null>;
   kill: (signal?: NodeJS.Signals | number) => boolean;
 }
 
@@ -65,25 +72,32 @@ export function spawnProcess(cmd: string[], opts: SpawnOpts = {}): SpawnedProces
     detached: opts.detached,
   });
 
+  let signalResolver: (sig: NodeJS.Signals | null) => void = () => {};
+  const exitedSignal = new Promise<NodeJS.Signals | null>((resolve) => {
+    signalResolver = resolve;
+  });
+
   const exited = new Promise<number>((resolve) => {
     let settled = false;
-    const settle = (code: number) => {
+    const settle = (code: number, signal: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
+      signalResolver(signal);
       resolve(code);
     };
     proc.on("exit", (code, signal) => {
       if (typeof code === "number") {
-        settle(code);
+        settle(code, null);
       } else if (signal) {
         // Conventional "killed by signal" mapping: 128 + signal number.
-        // We don't have the numeric signal here reliably, fall back to 1.
-        settle(1);
+        const signum =
+          (os.constants?.signals as Record<string, number> | undefined)?.[signal] ?? 0;
+        settle(128 + signum, signal as NodeJS.Signals);
       } else {
-        settle(0);
+        settle(0, null);
       }
     });
-    proc.on("error", () => settle(1));
+    proc.on("error", () => settle(1, null));
   });
 
   const stdout = Readable.toWeb(proc.stdout!) as unknown as ReadableStream<Uint8Array>;
@@ -97,6 +111,7 @@ export function spawnProcess(cmd: string[], opts: SpawnOpts = {}): SpawnedProces
     stdout,
     stderr: stderrStream,
     exited,
+    exitedSignal,
     kill: (signal) => {
       try {
         if (opts.detached && proc.pid) {
@@ -139,15 +154,31 @@ export function spawnProcessWithStdin(
     stdio: ["pipe", "pipe", stderrMode],
   });
 
+  let signalResolver: (sig: NodeJS.Signals | null) => void = () => {};
+  const exitedSignal = new Promise<NodeJS.Signals | null>((resolve) => {
+    signalResolver = resolve;
+  });
+
   const exited = new Promise<number>((resolve) => {
     let settled = false;
-    const settle = (code: number) => {
+    const settle = (code: number, signal: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
+      signalResolver(signal);
       resolve(code);
     };
-    proc.on("exit", (code) => settle(code ?? 0));
-    proc.on("error", () => settle(1));
+    proc.on("exit", (code, signal) => {
+      if (typeof code === "number") {
+        settle(code, null);
+      } else if (signal) {
+        const signum =
+          (os.constants?.signals as Record<string, number> | undefined)?.[signal] ?? 0;
+        settle(128 + signum, signal as NodeJS.Signals);
+      } else {
+        settle(0, null);
+      }
+    });
+    proc.on("error", () => settle(1, null));
   });
 
   const stdin = Writable.toWeb(proc.stdin!) as unknown as WritableStream<Uint8Array>;
@@ -163,6 +194,7 @@ export function spawnProcessWithStdin(
     stdout,
     stderr: stderrStream,
     exited,
+    exitedSignal,
     kill: (signal) => {
       try {
         return proc.kill(signal);

@@ -383,4 +383,39 @@ describe("materializeAttachments", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  testIf("image_url with parameterized content-type still derives the correct extension", async () => {
+    if (!materializeAttachments) return;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: {
+          // Realistic server response — many CDNs include charset / name params.
+          "content-type": "image/png; charset=binary",
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const atts: Attachment[] = [
+        { type: "image_url", url: "https://example.com/with-params.png" },
+      ];
+      const mats = await materializeAttachments(atts);
+      try {
+        expect(mats).toHaveLength(1);
+        // Regression: previously the parameter portion was passed to the
+        // extension lookup, so the file was written without an extension.
+        expect(mats[0]!.path.endsWith(".png")).toBe(true);
+        // mimeType is normalized (parameters stripped) so downstream callers
+        // get a stable type without per-server quirks.
+        expect(mats[0]!.mimeType).toBe("image/png");
+      } finally {
+        await cleanupAttachments!(mats);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

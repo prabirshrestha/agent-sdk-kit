@@ -183,6 +183,35 @@ function contentPartToAcpBlock(p: ContentPart): AcpContentBlock | null {
 }
 
 /**
+ * Decide what to do with a model override for an ACP session.
+ *
+ * Returns the action the streaming generator should take:
+ * - `"skip"`: do nothing (no override, or soft-skip for resumed sessions with
+ *   unknown capability and a non-explicit per-call override).
+ * - `"unsupported"`: throw `AgentError(not_supported)` — the agent explicitly
+ *   does NOT advertise model selection on this session.
+ * - `"apply"`: call `setSessionModel`; failures surface as
+ *   `AgentError(provider)`.
+ */
+export function decideAcpModelOverride(input: {
+  modelOverride: string | undefined;
+  hasSessionId: boolean;
+  capability: boolean | undefined; // undefined = unknown (resumed session)
+  opKind: "start" | "resume" | "fork";
+  explicitPerCall: boolean;
+}): "skip" | "unsupported" | "apply" {
+  const { modelOverride, hasSessionId, capability, opKind, explicitPerCall } = input;
+  if (!modelOverride || !hasSessionId) return "skip";
+  if (capability === false) return "unsupported";
+  // On resume, capability is unknown (loadSession does not return it). If the
+  // user didn't *explicitly* pass `opts.model` for this call, treat the
+  // construction-time `defaultModel` as a soft hint and skip — re-applying
+  // the same model on every resumed turn shouldn't abort the turn.
+  if (opKind === "resume" && capability === undefined && !explicitPerCall) return "skip";
+  return "apply";
+}
+
+/**
  * Create an ACP transport provider.
  * Spawns an ACP-compatible server subprocess and communicates over stdio.
  */
@@ -328,6 +357,23 @@ export function createAcpTransport(
       let accumulatedText = "";
       let sessionId: string | undefined = op.kind === "resume" ? op.sessionId : undefined;
       const eventQueue: AgentEvent[] = [];
+      // Queue+waker so session/update notifications stream to the caller while
+      // `agentClient.prompt(...)` is in flight, instead of being buffered until
+      // the entire turn finishes. Without this the ACP transport effectively
+      // disables streaming (textStream / fullStream see no events until end of
+      // turn).
+      let wakeQueue: (() => void) | null = null;
+      const notifyQueue = () => {
+        if (wakeQueue) {
+          const w = wakeQueue;
+          wakeQueue = null;
+          w();
+        }
+      };
+      const waitForEvents = () =>
+        new Promise<void>((resolve) => {
+          wakeQueue = resolve;
+        });
 
       // Helper: push an event, augmenting with _meta from the ACP update if present
       const pushEvent = (event: AgentEvent, meta: unknown) => {
@@ -336,6 +382,7 @@ export function createAcpTransport(
         } else {
           eventQueue.push(event);
         }
+        notifyQueue();
       };
 
       // Helper: extract subagent linkage from an ACP toolCall object
@@ -665,6 +712,12 @@ export function createAcpTransport(
       let aborted = false;
       const abortListener = () => {
         aborted = true;
+        // Wake the streaming loop so it notices `aborted` and exits promptly.
+        if (wakeQueue) {
+          const w = wakeQueue;
+          wakeQueue = null;
+          w();
+        }
         void (async () => {
           try {
             const cancelPromise = Promise.resolve(agentClient?.cancel?.({ sessionId }));
@@ -785,46 +838,92 @@ export function createAcpTransport(
         }
 
         // Per-call `opts.model` wins over construction-time `config.model`.
-        // ACP's session/set_model RPC is UNSTABLE per the schema; only
-        // attempt it when the agent advertised support via the session's
-        // `models` capability. For resumed sessions whose support flag we
-        // didn't capture (loadSession doesn't return `models`), best-effort:
-        // try the call and surface a clear error if the agent rejects it.
+        // ACP's session/set_model RPC is UNSTABLE per the schema; see
+        // `decideAcpModelOverride` for the full decision matrix.
         const modelOverride = opts.model ?? defaultModel;
+        const explicitPerCall = opts.model !== undefined;
         if (modelOverride && sessionId) {
-          if (sessionSupportsModelSelection.get(sessionId) === false) {
+          const capability = sessionSupportsModelSelection.get(sessionId);
+          const decision = decideAcpModelOverride({
+            modelOverride,
+            hasSessionId: true,
+            capability,
+            opKind: op.kind,
+            explicitPerCall,
+          });
+
+          if (decision === "unsupported") {
             throw notSupported(
               `ACP agent did not advertise model selection on this session (NewSessionResponse.models was null), so model override "${modelOverride}" cannot be applied. The session/set_model capability is marked UNSTABLE in the ACP schema.`,
               "model_override_unsupported",
             );
           }
-          if (!agentClient.setSessionModel) {
-            throw notSupported(
-              `ACP client does not implement setSessionModel; cannot apply model override "${modelOverride}".`,
-              "model_override_unsupported",
-            );
-          }
-          try {
-            await agentClient.setSessionModel({ sessionId, modelId: modelOverride });
-          } catch (err) {
-            throw new AgentError(
-              "provider",
-              `ACP setSessionModel failed for "${modelOverride}": ${err instanceof Error ? err.message : String(err)}`,
-              err,
-            );
+
+          if (decision === "apply") {
+            if (!agentClient.setSessionModel) {
+              throw notSupported(
+                `ACP client does not implement setSessionModel; cannot apply model override "${modelOverride}".`,
+                "model_override_unsupported",
+              );
+            }
+            try {
+              await agentClient.setSessionModel({ sessionId, modelId: modelOverride });
+            } catch (err) {
+              throw new AgentError(
+                "provider",
+                `ACP setSessionModel failed for "${modelOverride}": ${err instanceof Error ? err.message : String(err)}`,
+                err,
+              );
+            }
           }
         }
 
-        // Send prompt (text + attachments + pass-through parts).
-        const promptResult = await agentClient.prompt({
-          sessionId,
-          prompt: promptBlocks,
-        });
+        // Send prompt and concurrently drain queued session/update events.
+        // The ACP server pushes session/update notifications throughout the
+        // turn; we yield them as they arrive instead of waiting for prompt()
+        // to resolve.
+        let promptResult: { stopReason?: string } | undefined;
+        let promptError: unknown;
+        let promptDone = false;
+        const promptPromise = agentClient
+          .prompt({ sessionId, prompt: promptBlocks })
+          .then((r: { stopReason?: string }) => {
+            promptResult = r;
+          })
+          .catch((e: unknown) => {
+            promptError = e;
+          })
+          .finally(() => {
+            promptDone = true;
+            notifyQueue();
+          });
 
-        // Emit all queued events, stopping early if aborted
-        for (const event of eventQueue) {
+        let qIdx = 0;
+        while (true) {
           if (aborted) break;
-          yield event;
+          // Drain anything currently queued.
+          while (qIdx < eventQueue.length) {
+            if (aborted) break;
+            const ev = eventQueue[qIdx++]!;
+            yield ev;
+          }
+          if (aborted) break;
+          if (promptDone && qIdx >= eventQueue.length) break;
+          // Wait for either a new event or for prompt() to resolve.
+          await waitForEvents();
+        }
+
+        // Make sure we await the prompt promise so any rejection surfaces
+        // and so we don't leak an unhandled rejection.
+        await promptPromise;
+        if (promptError) {
+          throw promptError;
+        }
+
+        // Drain any straggling events that arrived after the last wake.
+        while (qIdx < eventQueue.length) {
+          if (aborted) break;
+          yield eventQueue[qIdx++]!;
         }
 
         if (aborted) {
@@ -833,14 +932,14 @@ export function createAcpTransport(
         }
 
         // Emit turn end and result
-        const stopReason = promptResult.stopReason || "end_turn";
+        const stopReason = promptResult?.stopReason || "end_turn";
         yield { type: "turn_end" as const, stopReason };
 
         if (!sessionId) {
           throw new AgentError("provider", "Session ID is not set");
         }
 
-        yield resultEvent(sessionId, accumulatedText, promptResult);
+        yield resultEvent(sessionId, accumulatedText, promptResult ?? {});
       } catch (err) {
         if (err instanceof AgentError) {
           throw err;

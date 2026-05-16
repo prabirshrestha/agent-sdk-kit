@@ -194,7 +194,10 @@ export async function materializeAttachments(
             "body_too_large",
           );
         }
-        const contentType = response.headers.get("content-type") || "image/png";
+        const rawContentType = response.headers.get("content-type") || "image/png";
+        // Strip parameters like "image/png; charset=binary" before extension lookup
+        // — the parameterized form does not match the mimeTypeToExtension map.
+        const contentType = rawContentType.split(";")[0]?.trim() || "image/png";
         const ext = mimeTypeToExtension(contentType);
         const tempPath = path.join(
           os.tmpdir(),

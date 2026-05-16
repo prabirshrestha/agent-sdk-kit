@@ -159,11 +159,14 @@ export async function* parseJsonlStream(
     try {
       reader.releaseLock();
     } catch (err) {
-      // Swallow "ReadableStreamDefaultReader released" / "lock released"
-      // races that can occur if the reader was already released (e.g. via
-      // reader.cancel() from the abort listener).
+      // Swallow harmless "lock already released / not held" races. The exact
+      // wording differs across runtimes:
+      //   - Bun:    "ReadableStreamDefaultReader: released"
+      //   - Node:   "Cannot release a lock on a reader that is not held"
+      //   - Spec:   includes the word "released"
       const msg = err instanceof Error ? err.message : String(err);
-      if (!/released/i.test(msg)) {
+      const isReleaseRace = /released|not\s+held|no\s+longer/i.test(msg);
+      if (!isReleaseRace) {
         // Unrelated error: re-surface via console (we can't throw from finally
         // without masking the iterator's own outcome).
         console.warn("[agent-sdk] reader.releaseLock() error:", err);
