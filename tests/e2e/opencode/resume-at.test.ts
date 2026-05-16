@@ -8,11 +8,18 @@
 // This avoids the multi-turn dance (which compounds LLM latency × retry budget
 // and made the previous version hang under shared rate limits).
 import { describe, test, expect } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createAgent, opencode } from "../../../src/index.js";
 import { e2eGate, retryScenario, consumeTurnWithRetry, runTurnWithRetry } from "../_helpers.js";
 
 const enabled = await e2eGate("opencode-sdk");
-const ocConfig = { cwd: "/tmp", model: "github-copilot/gpt-5-mini" } as const;
+// Isolated cwd per run: shared dirs like /tmp let the model persist the word
+// to a file (e.g. remembered_words.txt) and read it back after revert,
+// defeating the rewind assertion.
+const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-resume-at-"));
+const ocConfig = { cwd, model: "github-copilot/gpt-5-mini" } as const;
 
 describe.skipIf(!enabled)("opencode SDK / resume-at", () => {
   test("resumeSessionAt rewinds in place (same sessionId) via session.revert", async () => {

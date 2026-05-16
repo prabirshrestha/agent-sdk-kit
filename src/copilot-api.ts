@@ -77,18 +77,42 @@ export function __resetCopilotApiCacheForTests(): void {
   pendingPromise = null;
 }
 
+/**
+ * Reconcile `baseUrl` and `port` into a single URL+port pair.
+ *
+ * Precedence: an explicit `config.port` always wins and overrides any port in
+ * `config.baseUrl`. The returned `baseUrl` is rewritten to reflect the
+ * effective port so that the spawn command, probe, and ready-wait all target
+ * the same daemon. Defaults: `http://localhost:4141`.
+ */
+export function resolveCopilotApiEndpoint(config: { baseUrl?: string; port?: number }): {
+  baseUrl: string;
+  port: number;
+} {
+  const defaultBase = "http://localhost:4141";
+  const raw = config.baseUrl || defaultBase;
+  const url = new URL(raw);
+  const baseUrlPort = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+  const port = config.port ?? baseUrlPort;
+  // Rewrite the URL's port so callers using `baseUrl` end up at the same
+  // place as the spawn command's `--port` argument.
+  url.port = String(port);
+  // URL.toString() always adds a trailing slash; strip it for cleaner concat
+  // with `/v1/models` in probes.
+  const baseUrl = url.toString().replace(/\/$/, "");
+  return { baseUrl, port };
+}
+
 async function createCopilotApiHandle(config: CopilotApiDaemonConfig): Promise<CopilotApiHandle> {
-  const baseUrl = config.baseUrl || "http://localhost:4141";
+  const { baseUrl, port } = resolveCopilotApiEndpoint(config);
   const daemon = config.daemon || "auto";
-  const resolvedPort = config.port || Number(new URL(baseUrl).port || "4141");
-  const port = resolvedPort;
   const startCommand = config.startCommand || [
     "npx",
     "-y",
     "copilot-api@latest",
     "start",
     "--port",
-    String(resolvedPort),
+    String(port),
   ];
 
   const authToken = "dummy";

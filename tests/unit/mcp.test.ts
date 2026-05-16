@@ -96,4 +96,47 @@ describe("compileMcp", () => {
       await result.claude!.cleanup();
     }
   });
+
+  test("opencode-cli writes config with type:local, array command, environment, enabled", async () => {
+    const servers: McpServerConfig[] = [
+      {
+        name: "weather",
+        transport: {
+          type: "stdio",
+          command: "uvx",
+          args: ["mcp-weather"],
+          env: { API_KEY: "abc" },
+        },
+      },
+    ];
+    const result = await compileMcp(servers, "opencode-cli");
+    expect(result.opencodeCli).toBeDefined();
+    try {
+      const raw = await fs.readFile(result.opencodeCli!.configPath, "utf-8");
+      const parsed = JSON.parse(raw) as { mcp: Record<string, any> };
+      const entry = parsed.mcp.weather;
+      // Matches McpLocalConfig in @opencode-ai/sdk types (type/command[]/environment/enabled).
+      expect(entry.type).toBe("local");
+      expect(entry.command).toEqual(["uvx", "mcp-weather"]);
+      expect(entry.environment).toEqual({ API_KEY: "abc" });
+      expect(entry.enabled).toBe(true);
+    } finally {
+      await result.opencodeCli!.cleanup();
+    }
+  });
+
+  test("opencode-cli skips non-stdio transports", async () => {
+    const servers: McpServerConfig[] = [
+      { name: "ok", transport: { type: "stdio", command: "x" } },
+      { name: "remote", transport: { type: "http", url: "https://example.com" } as any },
+    ];
+    const result = await compileMcp(servers, "opencode-cli");
+    try {
+      const raw = await fs.readFile(result.opencodeCli!.configPath, "utf-8");
+      const parsed = JSON.parse(raw) as { mcp: Record<string, any> };
+      expect(Object.keys(parsed.mcp)).toEqual(["ok"]);
+    } finally {
+      await result.opencodeCli!.cleanup();
+    }
+  });
 });

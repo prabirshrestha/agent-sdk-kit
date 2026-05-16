@@ -34,6 +34,34 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 /**
+ * Encode a cwd into Claude's project directory name.
+ *
+ * Claude Code stores sessions under `~/.claude/projects/<encoded>/<sid>.jsonl`
+ * where the encoding replaces BOTH `/` AND `.` with `-`. Examples:
+ *   /home/me/repo           → -home-me-repo
+ *   /Users/me/project.v2    → -Users-me-project-v2
+ *   /home/me/.config/agent  → -home-me--config-agent
+ *
+ * Replacing only `/` silently misses dotted paths and dotfile dirs, which
+ * causes deleteSession (and any cleanup logic) to no-op against the wrong
+ * path and leak session files on disk.
+ */
+export function encodeClaudeProjectDir(cwd: string): string {
+  return cwd.replace(/[/.]/g, "-");
+}
+
+/** Resolve the on-disk path of a Claude session file for a given cwd. */
+export function claudeSessionFilePath(cwd: string, sessionId: string): string {
+  return path.join(
+    os.homedir(),
+    ".claude",
+    "projects",
+    encodeClaudeProjectDir(cwd),
+    `${sessionId}.jsonl`,
+  );
+}
+
+/**
  * Create a Claude provider (CLI transport).
  */
 export function claude(config?: ClaudeConfig): ProviderImpl {
@@ -82,16 +110,7 @@ export function claude(config?: ClaudeConfig): ProviderImpl {
       // path traversal (e.g. "../../etc/passwd").
       assertValidSessionId(sessionId);
 
-      // Compute path: ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl
-      const homeDir = os.homedir();
-      const encodedCwd = cwd.replace(/\//g, "-");
-      const sessionPath = path.join(
-        homeDir,
-        ".claude",
-        "projects",
-        encodedCwd,
-        `${sessionId}.jsonl`,
-      );
+      const sessionPath = claudeSessionFilePath(cwd, sessionId);
 
       try {
         await fs.unlink(sessionPath);

@@ -27,6 +27,7 @@ import {
   resultEvent,
   errorEvent,
   rawEvent,
+  extensionEvent,
 } from "../events.js";
 import { AgentError, notSupported, redactSecrets } from "../errors.js";
 import {
@@ -321,6 +322,7 @@ export async function* _streamPi(
   try {
     let sessionId: string | undefined;
     let sessionEmitted = false;
+    let sessionSynthetic = false;
     let forkEmitted = false;
     let turnStarted = false;
     let turnEnded = false;
@@ -351,13 +353,9 @@ export async function* _streamPi(
                   ? crypto.randomUUID()
                   : Date.now().toString(36)
               }`;
+        sessionSynthetic = op.kind !== "resume";
       }
-      if (!sessionEmitted) {
-        if (op.kind === "fork" && !forkEmitted) {
-          forkEmitted = true;
-        }
-        sessionEmitted = true;
-      }
+      sessionEmitted = true;
       return sessionId;
     };
 
@@ -371,15 +369,29 @@ export async function* _streamPi(
 
       const type = event.type as string | undefined;
 
-      // Capture session ID from the first `session` event (or any event that
-      // carries an id-like field — extractSessionId falls back to sessionId /
-      // session_id on the event itself).
-      if (!sessionId) {
-        const sid = extractSessionId(event);
-        if (sid) sessionId = sid;
+      // Capture session ID from upstream. If the watchdog already synthesized
+      // an id, override it with the real one and emit a corrective extension
+      // event so consumers can reconcile (e.g. persistence layers tracking
+      // session paths on disk).
+      const upstreamSid = extractSessionId(event);
+      if (upstreamSid && upstreamSid !== sessionId) {
+        if (sessionEmitted && sessionSynthetic) {
+          const previous = sessionId;
+          sessionId = upstreamSid;
+          sessionSynthetic = false;
+          yield extensionEvent("pi", "session_id_corrected", {
+            previousSessionId: previous,
+            sessionId: upstreamSid,
+          });
+        } else if (!sessionId) {
+          sessionId = upstreamSid;
+        }
       }
 
       // Primary path: emit session as soon as we see an id from upstream.
+      // For fork ops we emit BOTH session_forked AND the canonical session
+      // event so downstream consumers that only listen for `session` (e.g.
+      // session persistence) still see the new id.
       if (sessionId && !sessionEmitted) {
         if (op.kind === "fork" && !forkEmitted) {
           yield {
@@ -388,9 +400,8 @@ export async function* _streamPi(
             sourceSessionId: op.sourceSessionId,
           };
           forkEmitted = true;
-        } else {
-          yield sessionEvent(sessionId);
         }
+        yield sessionEvent(sessionId);
         sessionEmitted = true;
       }
 
@@ -408,9 +419,8 @@ export async function* _streamPi(
             sourceSessionId: op.sourceSessionId,
           };
           forkEmitted = true;
-        } else {
-          yield sessionEvent(sid);
         }
+        yield sessionEvent(sid);
       }
       if (!turnStarted && turnImpliedBy) {
         yield turnStartEvent();
