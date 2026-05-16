@@ -90,8 +90,7 @@ export function spawnProcess(cmd: string[], opts: SpawnOpts = {}): SpawnedProces
         settle(code, null);
       } else if (signal) {
         // Conventional "killed by signal" mapping: 128 + signal number.
-        const signum =
-          (os.constants?.signals as Record<string, number> | undefined)?.[signal] ?? 0;
+        const signum = (os.constants?.signals as Record<string, number> | undefined)?.[signal] ?? 0;
         settle(128 + signum, signal as NodeJS.Signals);
       } else {
         settle(0, null);
@@ -171,8 +170,7 @@ export function spawnProcessWithStdin(
       if (typeof code === "number") {
         settle(code, null);
       } else if (signal) {
-        const signum =
-          (os.constants?.signals as Record<string, number> | undefined)?.[signal] ?? 0;
+        const signum = (os.constants?.signals as Record<string, number> | undefined)?.[signal] ?? 0;
         settle(128 + signum, signal as NodeJS.Signals);
       } else {
         settle(0, null);

@@ -1,13 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import {
-  createNormalizeState,
-  normalizeEvent,
-} from "../../src/transports/sdk-copilot.ts";
+import { createNormalizeState, normalizeEvent } from "../../src/transports/sdk-copilot.ts";
 
 // Cast to satisfy the SDK SessionEvent type — the runtime only reads
 // `type` and `data` so this is safe for the test.
 const ev = (type: string, data: unknown) =>
-  ({ type, data } as unknown as Parameters<typeof normalizeEvent>[0]);
+  ({ type, data }) as unknown as Parameters<typeof normalizeEvent>[0];
 
 describe("sdk-copilot normalizeEvent text dedup", () => {
   test("synthesizes deltas when SDK only emits assistant.message", () => {
@@ -45,10 +42,7 @@ describe("sdk-copilot normalizeEvent text dedup", () => {
 
   test("separate messageIds are tracked independently", () => {
     const state = createNormalizeState();
-    normalizeEvent(
-      ev("assistant.message_delta", { deltaContent: "abc", messageId: "m1" }),
-      state,
-    );
+    normalizeEvent(ev("assistant.message_delta", { deltaContent: "abc", messageId: "m1" }), state);
     const m2 = normalizeEvent(
       ev("assistant.message", { content: "fresh message", messageId: "m2" }),
       state,
@@ -57,9 +51,7 @@ describe("sdk-copilot normalizeEvent text dedup", () => {
   });
 
   test("works without state (backward compatible) — still synthesizes", () => {
-    const out = normalizeEvent(
-      ev("assistant.message", { content: "hi", messageId: "m1" }),
-    );
+    const out = normalizeEvent(ev("assistant.message", { content: "hi", messageId: "m1" }));
     expect(out.filter((e) => e.type === "text_delta").length).toBeGreaterThan(0);
   });
 

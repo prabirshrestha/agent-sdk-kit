@@ -15,10 +15,7 @@
 import { describe, test, expect } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-  encodeClaudeProjectDir,
-  claudeSessionFilePath,
-} from "../../src/providers/claude.js";
+import { encodeClaudeProjectDir, claudeSessionFilePath } from "../../src/providers/claude.js";
 
 describe("encodeClaudeProjectDir", () => {
   test("replaces `/` with `-`", () => {

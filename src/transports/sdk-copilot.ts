@@ -855,7 +855,7 @@ export function normalizeEvent(ev: SessionEvent, state?: NormalizeState): AgentE
       // Synthesize chunked deltas only when the SDK did NOT already stream
       // `assistant.message_delta` events for this messageId. Without this
       // guard, callers see ~2x the assistant text (streamed + synthesized).
-      const alreadyStreamed = messageId ? state?.streamedMessages.has(messageId) ?? false : false;
+      const alreadyStreamed = messageId ? (state?.streamedMessages.has(messageId) ?? false) : false;
       if (text && !alreadyStreamed) {
         const chunkSize = 50; // Reasonable chunk size for streaming simulation
         for (let i = 0; i < text.length; i += chunkSize) {
